@@ -79,7 +79,7 @@ async function ensurePortal(): Promise<Stripe.BillingPortal.Configuration> {
 async function main() {
   const portal = await ensurePortal();
   const report = await ensureProduct("report", "BuildingTea building report", "One-time: the full plain-English report for one NYC building, with an emailed link and PDF.");
-  const watch = await ensureProduct("watch", "BuildingTea building watch", "Monthly: a re-check of one NYC building's city records, a refreshed report, and an email on what changed, once a month.");
+  const watch = await ensureProduct("watch", "BuildingTea building watch", "Monthly: a re-check of one NYC building's city records, a refreshed report, and an email with a short note on what changed, once a month.");
   const reportPrice = await ensurePrice(report, reportCents, false);
   const watchPrice = await ensurePrice(watch, watchCents, true);
   const { endpoint, created } = await ensureWebhook(`${appUrl}/api/stripe/webhook`);

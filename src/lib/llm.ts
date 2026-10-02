@@ -78,6 +78,7 @@ export async function rewriteSummary(cfg: LlmConfig, facts: SummaryFacts, draft:
  * nothing changed (no model call) or when the output fails the guards; the digest
  * email then uses its template copy.
  */
+/** The monthly email's note on what changed. Only called when the diff is non-empty. */
 export async function summarizeChanges(cfg: LlmConfig, args: { addressLabel: string; changes: string[] }): Promise<string | null> {
   if (args.changes.length === 0) return null;
   const input = JSON.stringify({ address: args.addressLabel, changes: args.changes });

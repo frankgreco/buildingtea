@@ -62,7 +62,7 @@ function topbar(onNew: () => void, opts: { newSearch?: boolean } = {}): HTMLElem
 
 /** Footer on every page: the two legal pages and the support address. data-nav links route client-side (main.ts). */
 function footerHtml(): string {
-  return `<footer class="foot"><a data-nav href="/privacy">Privacy</a><a data-nav href="/terms">Terms</a><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></footer>`;
+  return `<footer class="foot"><a data-nav href="/privacy">Privacy</a><a data-nav href="/terms">Terms</a><a href="mailto:${SUPPORT_EMAIL}">Contact</a></footer>`;
 }
 
 const PERKS: { key: Card["key"]; title: string; blurb: string }[] = [

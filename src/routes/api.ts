@@ -208,7 +208,7 @@ export async function fulfil(env: Env, session: Stripe.Checkout.Session, ctx: Wa
     console.log(`fulfil report session=${session.id} report=${reportId} first=${first} email=${email ? "yes" : "no"}`);
     if (first) {
       quiet(enhanceSummary(env, reportId), "summary");
-      if (email) quiet(sendEmail(env, { to: email, ...receiptEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link }) }), "receipt email");
+      if (email) quiet(sendEmail(env, { to: email, ...receiptEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link }) }, { idempotencyKey: `receipt/${session.id}` }), "receipt email");
     }
     return { token, plan };
   }
@@ -216,6 +216,8 @@ export async function fulfil(env: Env, session: Stripe.Checkout.Session, ctx: Wa
   const subId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
   if (!subId || !customerId || !email) return null;
   const report = JSON.parse(row.report_json) as Report;
+  // Pre-tax recurring amount as shown at checkout; Managed Payments adds sales tax on top at billing time.
+  const monthly = session.amount_subtotal != null && session.currency ? new Intl.NumberFormat("en-US", { style: "currency", currency: session.currency.toUpperCase() }).format(session.amount_subtotal / 100) : null;
   const { watch, created } = await db.upsertWatch({
     reportId,
     bin: row.bin,
@@ -226,14 +228,13 @@ export async function fulfil(env: Env, session: Stripe.Checkout.Session, ctx: Wa
     customerId,
     subscriptionId: subId,
     snapshot: snapshotOf(report),
+    priceLabel: monthly,
   });
   await db.insertToken(await sha256Hex(token), reportId, { watchId: watch.id });
   if (created) {
     quiet(enhanceSummary(env, reportId), "summary");
     const manageUrl = `https://${env.CANONICAL_HOST}/api/report/${reportId}/manage?t=${token}`;
-    // Pre-tax recurring amount for the confirmation email; Managed Payments adds sales tax on top at billing time.
-    const monthly = session.amount_subtotal != null && session.currency ? new Intl.NumberFormat("en-US", { style: "currency", currency: session.currency.toUpperCase() }).format(session.amount_subtotal / 100) : null;
-    quiet(sendEmail(env, { to: email, ...watchStartedEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link, manageUrl, monthly }) }), "watch email");
+    quiet(sendEmail(env, { to: email, ...watchStartedEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link, manageUrl, monthly }) }, { idempotencyKey: `watch-started/${subId}` }), "watch email");
   }
   return { token, plan };
 }

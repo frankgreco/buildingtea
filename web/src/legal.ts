@@ -1,7 +1,7 @@
 // Privacy policy and terms, served at /privacy and /terms. Plain English and short on
 // purpose. Edit the text here and bump LEGAL_EFFECTIVE when it changes materially.
 
-export const SUPPORT_EMAIL = "hello@buildingtea.com";
+export const SUPPORT_EMAIL = "frank@lifeisfake.com";
 export const LEGAL_EFFECTIVE = "October 2, 2026";
 
 const mail = `<a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>`;
@@ -40,7 +40,7 @@ export const LEGAL: Record<"privacy" | "terms", { title: string; html: string }>
 <h2>Buying a report</h2>
 <p>The one-time price is shown at checkout. Stripe is the seller of record: it processes the payment, sends the receipt, and handles refunds and disputes. The link we email is the key to your report. Anyone with the link can open it, so share it on purpose.</p>
 <h2>Watching a building</h2>
-<p>A watch is a monthly subscription at the price shown at checkout, plus any sales tax. Once a month it re-checks the building's city records and emails you a refreshed report with a note on what changed. It renews every month and bills the card you used until you cancel. Cancel any time from the "Manage or cancel" link in any watch email or on your report page. Cancelling stops the next charge, and your watch runs through the end of the period you've paid for. If you can't find the link, email ${mail} from the address you signed up with and we'll cancel it for you. We'll email you before any price change takes effect.</p>
+<p>A watch is a monthly subscription at the price shown at checkout, plus any sales tax. Once a month it re-checks the building's city records and emails you a short note on what changed with a link to the refreshed report. It renews every month and bills the card you used until you cancel. Cancel any time from the "Manage or cancel" link in any watch email or on your report page. Cancelling stops the next charge, and your watch runs through the end of the period you've paid for. If you can't find the link, email ${mail} from the address you signed up with and we'll cancel it for you. We'll email you before any price change takes effect.</p>
 <h2>Fair use</h2>
 <p>Search like a person, for your own use. Don't scrape, resell, or republish reports, and don't use them to harass anyone.</p>
 <h2>No warranty, limited liability</h2>

@@ -8,6 +8,7 @@ import { DATASETS, fetchBuildingData } from "./datasets";
 import { Db } from "./db";
 import { isPlaceholderBin, resolveAddress, type GeoHit } from "./geosearch";
 import { rewriteSummary } from "./llm";
+import type { SummaryFacts } from "./summary";
 import { datasetUpdatedAt } from "./soda";
 import { randomId } from "./tokens";
 
@@ -87,6 +88,11 @@ export async function search(env: Env, input: string): Promise<SearchOutcome> {
  * Rewrite the stored summary with the LLM. Called via ctx.waitUntil after a purchase.
  * Silently keeps the template on any failure.
  */
+/** Exactly what the AI summary is written from. Two reports with equal facts can share one summary. */
+export function summaryFacts(r: Report): SummaryFacts {
+  return { address: r.address, cover: r.cover, counts: r.counts, ownership: r.ownership, bedbugs: r.bedbugs, cards: r.cards };
+}
+
 export async function enhanceSummary(env: Env, reportId: string): Promise<void> {
   if (!env.OPENAI_API_KEY) return;
   const db = new Db(env.DB);
@@ -97,7 +103,7 @@ export async function enhanceSummary(env: Env, reportId: string): Promise<void> 
   try {
     const result = await rewriteSummary(
       { apiKey: env.OPENAI_API_KEY, appUrl: `https://${env.CANONICAL_HOST}`, appName: env.APP_NAME },
-      { address: report.address, cover: report.cover, counts: report.counts, ownership: report.ownership, bedbugs: report.bedbugs, cards: report.cards },
+      summaryFacts(report),
       report.summary,
     );
     if (!result) return;

@@ -113,10 +113,21 @@ In GitHub, create a `production` environment and add these repository secrets:
 
 Every push to `main` runs `.github/workflows/deploy.yml`: typecheck, tests, frontend build, D1 migrations, push secrets into the Worker, deploy, smoke test. Pull requests run `check.yml` with no secrets.
 
+### Email
+
+Three transactional emails go out through [Resend](https://resend.com): the unlock link after a report purchase, the watch confirmation, and the monthly check. The templates are in `src/lib/email.ts`; `pnpm email:preview` renders them to `/tmp/buildingtea-emails`. Until `RESEND_API_KEY` is set, emails are only logged.
+
+1. In Resend, add the domain `buildingtea.com` and add the DNS records it lists (DKIM, plus SPF and MX on its sending subdomain) in Cloudflare DNS. Wait for Resend to show the domain as verified.
+2. Create an API key with sending access, limited to that domain. Add it as the `RESEND_API_KEY` GitHub secret (and to `.prod.vars`). The next push to `main` pushes it into the Worker.
+3. Send yourself all four samples to check real inboxes: `RESEND_API_KEY=re_... pnpm email:preview --send you@example.com`.
+
+The sender is `EMAIL_FROM` in `wrangler.jsonc` (`BuildingTea <no-reply@buildingtea.com>`); replies are not received. The footer's Contact link and the legal pages point to the support address in `web/src/legal.ts`.
+
 ## Operations
 
 - **Cost.** Workers, D1, KV, cron and static hosting are all on Cloudflare's free tier at this scale. The watch digest job handles one building per cron run (every ten minutes, about 4,000 a month) to stay under the free plan's 50-subrequest cap per invocation; on Workers Paid, raise `PER_RUN` in `src/scheduled.ts`. Domains are the only fixed cost.
 - **Backups.** D1 keeps 30 days of point-in-time history (`pnpm exec wrangler d1 time-travel`). For an off-platform copy, `pnpm exec wrangler d1 export buildingtea --remote --output backup.sql`.
 - **Logs.** `pnpm exec wrangler tail` streams the Worker; observability is enabled in `wrangler.jsonc`.
+- **Email failures.** Every send carries an idempotency key, so retries never duplicate an email. Transient Resend failures are retried in place. A monthly check that still fails backs that watch off for six hours so it can't block the queue; an address Resend refuses outright skips that month. Search the logs for `undeliverable` or `retrying in a few hours`.
 - **Upstream outages.** A failed dataset doesn't fail a search; the report notes the section as unavailable. If GeoSearch is down, search returns `upstream` and the page says so.
 - **Data freshness.** Reports are reused for 24 hours per building+unit. Watched buildings are rebuilt monthly, when their digest is due.

@@ -4,6 +4,8 @@ import type { Report, Teaser, WatchSnapshot } from "@shared/types";
 
 /** Days between watch digests (and from watch start to the first one). */
 export const DIGEST_INTERVAL_DAYS = 30;
+/** A watch whose digest failed waits this long before the next try, so it never blocks the queue. */
+export const DIGEST_RETRY_HOURS = 6;
 
 export interface ReportRow {
   id: string;
@@ -42,6 +44,10 @@ export interface WatchRow {
   /** Unused since the monthly digest replaced nightly alerts; kept in the schema. */
   last_alert_at: string | null;
   last_digest_at: string | null;
+  /** Formatted recurring price as shown at checkout, e.g. "$3.00"; restated in each digest. */
+  price_label: string | null;
+  /** When the last failed digest attempt happened; drives the retry backoff. */
+  last_attempt_at: string | null;
   created_at: string;
 }
 
@@ -158,6 +164,7 @@ export class Db {
     customerId: string;
     subscriptionId: string;
     snapshot: WatchSnapshot;
+    priceLabel: string | null;
   }): Promise<{ watch: WatchRow; created: boolean }> {
     const existing = await this.watchBySubscription(w.subscriptionId);
     if (existing) {
@@ -166,10 +173,10 @@ export class Db {
     }
     await this.d1
       .prepare(
-        `INSERT OR IGNORE INTO watches (report_id, bin, bbl, unit, address_label, email, stripe_customer_id, stripe_subscription_id, status, last_snapshot_json, last_checked_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?10)`,
+        `INSERT OR IGNORE INTO watches (report_id, bin, bbl, unit, address_label, email, stripe_customer_id, stripe_subscription_id, status, last_snapshot_json, last_checked_at, price_label)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?10, ?11)`,
       )
-      .bind(w.reportId, w.bin, w.bbl, w.unit, w.addressLabel, w.email, w.customerId, w.subscriptionId, JSON.stringify(w.snapshot), new Date().toISOString())
+      .bind(w.reportId, w.bin, w.bbl, w.unit, w.addressLabel, w.email, w.customerId, w.subscriptionId, JSON.stringify(w.snapshot), new Date().toISOString(), w.priceLabel)
       .run();
     const watch = await this.watchBySubscription(w.subscriptionId);
     if (!watch) throw new Error("watch row missing after insert");
@@ -192,20 +199,29 @@ export class Db {
    * Watches whose monthly digest is due: the first one 30 days after the watch started,
    * then 30 days after the previous digest. Only 'active' watches; past_due watches get
    * no digest until Stripe collects payment and the webhook flips them back to active.
+   * A watch that failed within the last DIGEST_RETRY_HOURS is skipped, so one broken
+   * watch can't sit at the head of the queue and starve the rest.
    */
   async listWatchesDue(limit = 50): Promise<WatchRow[]> {
     // Half a day of slack: without it a watch stamped seconds after a run is not due until the run after the 30-day mark.
     const cutoff = new Date(Date.now() - (DIGEST_INTERVAL_DAYS * 24 - 12) * 3600_000).toISOString();
+    const retryCutoff = new Date(Date.now() - DIGEST_RETRY_HOURS * 3600_000).toISOString();
     const res = await this.d1
       .prepare(
         `SELECT * FROM watches
          WHERE status = 'active' AND COALESCE(last_digest_at, created_at) <= ?1
+           AND (last_attempt_at IS NULL OR last_attempt_at <= ?3)
          ORDER BY COALESCE(last_digest_at, created_at) ASC
          LIMIT ?2`,
       )
-      .bind(cutoff, limit)
+      .bind(cutoff, limit, retryCutoff)
       .all<WatchRow>();
     return res.results;
+  }
+
+  /** Record a failed digest attempt; the watch is retried after DIGEST_RETRY_HOURS. */
+  async markWatchAttempted(id: number): Promise<void> {
+    await this.d1.prepare("UPDATE watches SET last_attempt_at = ?2 WHERE id = ?1").bind(id, new Date().toISOString()).run();
   }
 
   /** Record a sent digest: the snapshot it was diffed to becomes the baseline for next month. */

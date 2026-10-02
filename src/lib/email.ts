@@ -16,18 +16,58 @@ export interface Mail {
   text: string;
 }
 
-export async function sendEmail(env: Env, mail: Mail): Promise<void> {
+/** A send Resend refused. `permanent` means retrying the same message cannot succeed (bad address, bad payload). */
+export class EmailError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`resend ${status}: ${body.slice(0, 200)}`);
+    this.name = "EmailError";
+  }
+  get permanent(): boolean {
+    return this.status >= 400 && this.status < 500 && this.status !== 408 && this.status !== 409 && this.status !== 429;
+  }
+}
+
+/** Waits between attempts; a Retry-After header wins when it is shorter than 5 s. */
+export const RETRY_DELAYS_MS = [500, 2000];
+
+/**
+ * Send one email. `idempotencyKey` (e.g. "receipt/cs_123") makes retries safe: Resend
+ * remembers a key for 24 hours and never sends the same key twice. Transient failures
+ * (network, timeouts, 429, 5xx, a concurrent request with the same key) are retried;
+ * anything else throws an EmailError.
+ */
+export async function sendEmail(env: Env, mail: Mail, opts: { idempotencyKey?: string } = {}): Promise<void> {
   if (!env.RESEND_API_KEY) {
     console.log(`[email:dry-run] to=${mail.to} subject=${JSON.stringify(mail.subject)}\n${mail.text}`);
     return;
   }
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" },
-    body: JSON.stringify({ from: env.EMAIL_FROM, to: [mail.to], subject: mail.subject, html: mail.html, text: mail.text }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) throw new Error(`resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const headers: Record<string, string> = { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" };
+  if (opts.idempotencyKey) headers["idempotency-key"] = opts.idempotencyKey.slice(0, 256);
+  const body = JSON.stringify({ from: env.EMAIL_FROM, to: [mail.to], subject: mail.subject, html: mail.html, text: mail.text });
+
+  for (let attempt = 0; ; attempt++) {
+    let failure: EmailError | Error;
+    let wait = RETRY_DELAYS_MS[attempt];
+    try {
+      const res = await fetch("https://api.resend.com/emails", { method: "POST", headers, body, signal: AbortSignal.timeout(10_000) });
+      if (res.ok) return;
+      const text = await res.text();
+      // Same key, different payload: an earlier attempt for this key already went out.
+      if (res.status === 409 && text.includes("invalid_idempotent_request")) return;
+      failure = new EmailError(res.status, text);
+      const retryAfter = Number(res.headers.get("retry-after"));
+      if (wait !== undefined && retryAfter > 0 && retryAfter * 1000 < 5000) wait = Math.max(wait, retryAfter * 1000);
+      if ((failure as EmailError).permanent) throw failure;
+    } catch (err) {
+      if (err instanceof EmailError && err.permanent) throw err;
+      failure = err instanceof Error ? err : new Error(String(err));
+    }
+    if (wait === undefined) throw failure;
+    await new Promise((r) => setTimeout(r, wait));
+  }
 }
 
 // ---------- frame ----------
@@ -39,16 +79,10 @@ export function titleCase(s: string): string {
   return s.toLowerCase().replace(/[a-z0-9]+/g, (w) => (/\d/.test(w) ? w.toUpperCase() : w[0]!.toUpperCase() + w.slice(1)));
 }
 
-const SUPPORT = "hello@buildingtea.com";
+const SUPPORT = "frank@lifeisfake.com";
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 /** The site's light-scheme tokens (web/src/styles.css :root). */
 const C = { page: "#fff3df", surface: "#fcfcfb", ink: "#16142b", text: "#0b0b0b", secondary: "#52514e", muted: "#898781", grid: "#e1e0d9", accent: "#ff5a3c", hilite: "#ffd84d" } as const;
-
-interface PanelRow {
-  /** Bold lead-in, e.g. "$3.00 a month". Rows without one get a coral bullet with a hanging indent. */
-  lead?: string;
-  text: string;
-}
 
 interface Frame {
   /** The inbox preview line; hidden in the body. */
@@ -56,20 +90,15 @@ interface Frame {
   /** Small uppercase line above the headline, like the site's .kicker. */
   kicker: string;
   /** Coral pill at the card's top right, like the site's "the gist" tag. */
-  tag?: string;
+  tag: string;
   /** The headline, highlighted in yellow like the site's h1. */
   title: string;
-  /** Plain text; escaped here. */
-  lead: string;
-  /** The site's .btn.primary, with its optional small sub-label. */
-  cta: { label: string; url: string; sub?: string };
-  /** Small muted line under the button, e.g. the raw link for copy-paste. */
-  ctaNote?: string;
-  /** A .perk-style tile: page colour, ink border. */
-  panel?: { kicker: string; rows: PanelRow[] };
-  /** Put the panel between the lead and the button (when the panel is the content). */
-  panelFirst?: boolean;
-  foot?: { title?: string; text: string; link: { label: string; url: string } };
+  /** Paragraph under the headline. Only the monthly check has one: its note on what changed. */
+  lead?: string;
+  /** The site's .btn.primary. No sub-label. */
+  cta: { label: string; url: string };
+  /** Optional block under a hairline: a title, one sentence, a link. */
+  foot?: { title: string; text: string; link: { label: string; url: string } };
   /** Any absolute URL on our origin; the lockup and footer links are derived from it. */
   link: string;
 }
@@ -77,44 +106,19 @@ interface Frame {
 function frame(f: Frame): string {
   const origin = new URL(f.link).origin;
   const s = (extra: string) => `font-family:${FONT};${extra}`;
-  const kicker = (text: string, extra = "") => `<div style="${s(`font-size:13px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:${C.secondary};${extra}`)}">${esc(text)}</div>`;
-  const rowStyle = s(`font-size:15px;line-height:23px;color:${C.text};padding-bottom:8px;`);
-  const row = (html: string) => `<div style="${rowStyle}">${html}</div>`;
-  const bullet = (html: string) =>
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td valign="top" width="16" style="${s(`width:16px;font-size:15px;line-height:23px;font-weight:900;color:${C.accent};padding-bottom:8px;`)}">&bull;</td><td valign="top" style="${rowStyle}">${html}</td></tr></table>`;
-
-  const panel = f.panel
-    ? `<tr><td class="px" style="padding:0 28px 26px;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="${C.page}" style="background-color:${C.page};border:2px solid ${C.ink};border-radius:14px;">
-    <tr><td style="padding:14px 16px 8px;">
-      ${kicker(f.panel.kicker, "padding-bottom:8px;")}
-      ${f.panel.rows.map((r) => (r.lead ? row(`<strong>${esc(r.lead)}</strong>&nbsp;&nbsp;${esc(r.text)}`) : bullet(esc(r.text)))).join("")}
-    </td></tr>
-  </table>
-</td></tr>`
-    : "";
-
-  const cta = `<tr><td class="px" align="left" style="padding:${f.panelFirst ? "0" : "20px"} 28px 26px;">
-  <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate;"><tr>
+  const kicker = `<div style="${s(`font-size:13px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:${C.secondary};padding-top:4px;`)}">${esc(f.kicker)}</div>`;
+  const tag = `<span style="${s(`display:inline-block;background-color:${C.accent};color:#ffffff;border:2px solid ${C.ink};border-radius:999px;padding:3px 10px;font-weight:900;font-size:12px;line-height:16px;white-space:nowrap;transform:rotate(3deg);`)}">${esc(f.tag)}</span>`;
+  const lead = f.lead ? `<div style="${s(`font-size:16px;line-height:25px;color:${C.secondary};padding-top:12px;`)}">${esc(f.lead)}</div>` : "";
+  const cta = `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate;"><tr>
     <td align="center" bgcolor="${C.accent}" style="background-color:${C.accent};border:2px solid ${C.ink};border-radius:14px;box-shadow:3px 3px 0 ${C.ink};">
-      <a href="${esc(f.cta.url)}" style="${s("display:block;padding:11px 22px;font-size:15px;line-height:20px;font-weight:900;color:#ffffff;text-decoration:none;text-align:center;")}">${esc(f.cta.label)}${
-        f.cta.sub ? `<span style="display:block;font-size:11px;line-height:15px;font-weight:700;opacity:0.9;">${esc(f.cta.sub)}</span>` : ""
-      }</a>
+      <a href="${esc(f.cta.url)}" style="${s("display:block;padding:13px 24px;font-size:16px;line-height:20px;font-weight:900;color:#ffffff;text-decoration:none;text-align:center;")}">${esc(f.cta.label)}</a>
     </td>
-  </tr></table>
-  ${f.ctaNote ? `<div style="${s(`font-size:12px;line-height:18px;color:${C.muted};padding-top:12px;word-break:break-all;`)}">${esc(f.ctaNote)}</div>` : ""}
-</td></tr>`;
-
+  </tr></table>`;
   const foot = f.foot
-    ? `<tr><td class="px" style="padding:0 28px 28px;border-top:2px solid ${C.grid};">
-  ${f.foot.title ? `<div style="${s(`font-size:17px;font-weight:900;letter-spacing:-0.01em;color:${C.text};padding-top:22px;`)}">${esc(f.foot.title)}</div>` : ""}
-  <div style="${s(`font-size:15px;line-height:23px;color:${C.secondary};padding-top:${f.foot.title ? "6px" : "22px"};padding-bottom:12px;`)}">${esc(f.foot.text)}</div>
-  <a href="${esc(f.foot.link.url)}" style="${s(`font-size:15px;font-weight:800;color:${C.text};text-decoration:underline;`)}">${esc(f.foot.link.label)}</a>
+    ? `<tr><td class="px" style="padding:0 28px 26px;border-top:2px solid ${C.grid};">
+  <div style="${s(`font-size:17px;font-weight:900;letter-spacing:-0.01em;color:${C.text};padding-top:18px;`)}">${esc(f.foot.title)}</div>
+  <div style="${s(`font-size:14px;line-height:22px;color:${C.secondary};padding-top:4px;`)}">${esc(f.foot.text)} <a href="${esc(f.foot.link.url)}" style="${s(`font-weight:800;color:${C.text};text-decoration:underline;`)}">${esc(f.foot.link.label)}</a></div>
 </td></tr>`
-    : "";
-
-  const tag = f.tag
-    ? `<td align="right" valign="top" style="padding-left:12px;"><span style="${s(`display:inline-block;background-color:${C.accent};color:#ffffff;border:2px solid ${C.ink};border-radius:999px;padding:3px 10px;font-weight:900;font-size:12px;line-height:16px;white-space:nowrap;transform:rotate(3deg);`)}">${esc(f.tag)}</span></td>`
     : "";
   const footLink = (href: string, label: string) => `<a href="${esc(href)}" style="color:${C.muted};font-weight:700;text-decoration:none;">${esc(label)}</a>`;
 
@@ -148,17 +152,17 @@ function frame(f: Frame): string {
         </td></tr>
         <tr><td bgcolor="${C.surface}" style="background-color:${C.surface};border:2px solid ${C.ink};border-radius:20px;box-shadow:5px 5px 0 ${C.ink};">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-            <tr><td class="px" style="padding:22px 28px ${f.panelFirst ? "18px" : "4px"};">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td valign="top">${kicker(f.kicker, "padding-top:4px;")}</td>${tag}</tr></table>
+            <tr><td class="px" style="padding:22px 28px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td valign="top">${kicker}</td><td align="right" valign="top" style="padding-left:12px;">${tag}</td></tr></table>
               <div class="h1" style="${s(`font-size:32px;line-height:36px;font-weight:900;letter-spacing:-0.03em;color:${C.text};padding-top:8px;`)}"><span style="background-color:${C.hilite};background:linear-gradient(transparent 55%,${C.hilite} 55%);padding:0 2px;">${esc(f.title)}</span></div>
-              <div style="${s(`font-size:16px;line-height:25px;color:${C.secondary};padding-top:12px;`)}">${esc(f.lead)}</div>
+              ${lead}
+              <div style="padding-top:${f.lead ? "20px" : "16px"};">${cta}</div>
             </td></tr>
-            ${f.panelFirst ? panel + cta : cta + panel}
             ${foot}
           </table>
         </td></tr>
         <tr><td align="center" style="padding:26px 16px 0;">
-          <div style="${s(`font-size:12px;line-height:20px;color:${C.muted};`)}">${footLink(`${origin}/privacy`, "Privacy")}&nbsp;&middot;&nbsp;${footLink(`${origin}/terms`, "Terms")}&nbsp;&middot;&nbsp;${footLink(`mailto:${SUPPORT}`, SUPPORT)}</div>
+          <div style="${s(`font-size:12px;line-height:20px;color:${C.muted};`)}">${footLink(`${origin}/privacy`, "Privacy")}&nbsp;&middot;&nbsp;${footLink(`${origin}/terms`, "Terms")}&nbsp;&middot;&nbsp;${footLink(`mailto:${SUPPORT}`, "Contact")}</div>
         </td></tr>
       </table>
       <!--[if mso]></td></tr></table><![endif]-->
@@ -171,95 +175,91 @@ function frame(f: Frame): string {
 
 // ---------- the emails ----------
 
-const WHAT = "new hazardous conditions, city fines, vacate orders, court cases, bedbug reports, or a change of landlord";
-
 export function receiptEmail(args: { appName: string; addressLabel: string; link: string }): Omit<Mail, "to"> {
   const { appName, addressLabel, link } = args;
   const address = titleCase(addressLabel);
-  const snapshot = "The report shows the city's records as of today. To keep it current, turn on a watch from the report page: a fresh report and a note on what changed, once a month.";
   return {
     subject: `Your ${appName} report for ${addressLabel}`,
-    text: `Here is your building report for ${addressLabel}:\n\n${link}\n\nThis link is your key to the report. Anyone with it can open it, so share it with roommates on purpose, not by accident.\n\n${snapshot}`,
+    text: `Your building report for ${address}:\n\n${link}`,
     html: frame({
       link,
-      preheader: `Your full report for ${address} is ready.`,
+      preheader: `Your report for ${address} is unlocked.`,
       kicker: "Your building report",
       tag: "unlocked",
       title: address,
-      lead: "The gist in plain English, the six questions answered, twenty years of violations charted, and every city record it came from.",
-      cta: { label: "Open your report", url: link, sub: "no login, the link is the key" },
-      ctaNote: `Or copy the link: ${link}`,
-      panel: {
-        kicker: "Keep this link",
-        rows: [
-          { lead: "It's your key.", text: "Anyone with it can open the report, so share it with roommates on purpose, not by accident." },
-          { lead: "It's a snapshot.", text: snapshot },
-        ],
-      },
+      cta: { label: "Open your report", url: link },
+    }),
+  };
+}
+
+// The watch confirmation and the monthly check are one email; the monthly check adds
+// its note on what changed, and the kicker, subject, and inbox preview line differ.
+
+/**
+ * The confirmation is the auto-renewal acknowledgment New York (GBL 527-a) and California
+ * (B&P 17602) require: the recurring price, that it renews until cancelled, the cancellation
+ * policy, and how to cancel. California also wants those terms restated at least yearly,
+ * which the monthly check covers by carrying the same sentence.
+ */
+const renewalTerms = (monthly: string | null) =>
+  `${monthly ? `${monthly} a month plus tax` : "Billed monthly at your checkout price"} until you cancel. Cancelling stops the next charge, and your watch runs through the month you've paid for.`;
+
+function watchEmail(a: { subject: string; kicker: string; preheader: string; addressLabel: string; link: string; manageUrl: string; monthly: string | null; lead?: string }): Omit<Mail, "to"> {
+  const address = titleCase(a.addressLabel);
+  const terms = renewalTerms(a.monthly);
+  return {
+    subject: a.subject,
+    text: `${a.kicker}: ${address}\n\n${a.lead ? `${a.lead}\n\n` : ""}Open your monthly report: ${a.link}\n\nNo longer for you? ${terms}\nManage or cancel: ${a.manageUrl}`,
+    html: frame({
+      link: a.link,
+      preheader: a.preheader,
+      kicker: a.kicker,
+      tag: "watching",
+      title: address,
+      ...(a.lead ? { lead: a.lead } : {}),
+      cta: { label: "Open your monthly report", url: a.link },
+      foot: { title: "No longer for you?", text: terms, link: { label: "Manage or cancel", url: a.manageUrl } },
     }),
   };
 }
 
 export function watchStartedEmail(args: { appName: string; addressLabel: string; link: string; manageUrl: string; monthly: string | null }): Omit<Mail, "to"> {
-  const { appName, addressLabel, link, manageUrl, monthly } = args;
-  const address = titleCase(addressLabel);
-  // The acknowledgment NY and CA auto-renewal law asks for: price, cadence, and how to cancel, in a form the buyer keeps.
-  const price = monthly ? `${monthly} a month plus any sales tax` : "billed monthly at the price shown at checkout";
-  const terms = `Your watch is ${price}, charged to the card you used, and it renews every month until you cancel. Cancelling stops the next charge; your watch runs through the end of the period you've paid for. Keep this email as your record of the terms.`;
-  const promise = (where: string) => `Once a month we'll re-check the city's records for ${where}, refresh your report, and email you what changed: ${WHAT}.`;
-  return {
-    subject: `${appName} is now watching ${addressLabel}`,
-    text: `${promise(addressLabel)}\n\nYour report: ${link}\n\n${terms}\n\nManage or cancel any time: ${manageUrl}`,
-    html: frame({
-      link,
-      preheader: `Once a month: a fresh report for ${address} and a note on what changed.`,
-      kicker: "Watch confirmed",
-      tag: "watching",
-      title: address,
-      lead: promise("this building"),
-      cta: { label: "Open your report", url: link, sub: "refreshed every month" },
-      ctaNote: `Or copy the link: ${link}`,
-      panel: {
-        kicker: "The terms",
-        rows: [
-          monthly ? { lead: `${monthly} a month`, text: "plus any sales tax, charged to the card you used." } : { lead: "Billed monthly", text: "at the price shown at checkout, plus any sales tax, charged to the card you used." },
-          { lead: "Renews every month", text: "until you cancel." },
-          { lead: "Cancel any time", text: "stops the next charge; your watch runs through the end of the period you've paid for." },
-        ],
-      },
-      foot: { title: "Not for you? No hard feelings.", text: "Cancel in a couple of clicks on your billing page. Keep this email as your record of the terms.", link: { label: "Manage or cancel", url: manageUrl } },
-    }),
-  };
+  return watchEmail({
+    ...args,
+    subject: `${args.appName} is now watching ${args.addressLabel}`,
+    kicker: "Watch confirmed",
+    preheader: `You're watching ${titleCase(args.addressLabel)}. Your report refreshes once a month.`,
+  });
 }
 
 /**
- * The monthly check-in. `summary` is the short AI-written paragraph about the changes
- * (or null when the model was unavailable); the change list itself is the receipts.
+ * The monthly check: the model's short note on what changed (template copy in quiet
+ * months or when the model is unavailable) over the same email as the confirmation.
+ * The change list itself stays out of the email; the details live in the report.
  */
-export function watchDigestEmail(args: { appName: string; addressLabel: string; link: string; manageUrl: string; changes: string[]; summary: string | null }): Omit<Mail, "to"> {
-  const { appName, addressLabel, link, manageUrl, changes, summary } = args;
+export function watchDigestEmail(args: {
+  appName: string;
+  addressLabel: string;
+  link: string;
+  manageUrl: string;
+  changes: string[];
+  /** The model's note on what changed; null in quiet months or when it failed. */
+  summary: string | null;
+  /** Formatted recurring price, e.g. "$3.00"; null when unknown. */
+  monthly: string | null;
+}): Omit<Mail, "to"> {
+  const { appName, addressLabel, changes, summary } = args;
   const address = titleCase(addressLabel);
   const n = changes.length;
-  const count = n === 1 ? "1 change" : `${n} changes`;
   const fallback = n
-    ? `Since your last check, ${n === 1 ? "one thing" : `${n} things`} changed in the city's records for ${address}. Your report has been refreshed.`
-    : `Nothing new showed up in the city's records for ${address} since your last check. Your report has been refreshed anyway, so it's current as of today.`;
+    ? `Since last month, ${n === 1 ? "one thing" : `${n} things`} changed in the city's records for ${address}. The details are in your report.`
+    : `Nothing new showed up in the city's records for ${address} since last month.`;
   const lead = summary?.trim() || fallback;
-  const list = changes.map((c) => `- ${c}`).join("\n");
-  return {
-    subject: n ? `${appName}: ${count} at ${addressLabel}` : `${appName}: nothing new at ${addressLabel}`,
-    text: `${lead}\n\n${n ? `What changed:\n${list}\n\n` : ""}Open the fresh report: ${link}\n\nYou're getting this once a month because you're watching ${addressLabel}. Manage or stop this watch: ${manageUrl}`,
-    html: frame({
-      link,
-      preheader: lead.length > 140 ? `${lead.slice(0, 137)}…` : lead,
-      kicker: n ? "Monthly check · something changed" : "Monthly check · all quiet",
-      tag: "watching",
-      title: address,
-      lead,
-      panelFirst: true,
-      ...(n ? { panel: { kicker: "What changed", rows: changes.map((text) => ({ text })) } } : {}),
-      cta: { label: "Open the fresh report", url: link, sub: "rebuilt today from the city's records" },
-      foot: { text: `You're getting this once a month because you're watching ${address}.`, link: { label: "Manage or stop this watch", url: manageUrl } },
-    }),
-  };
+  return watchEmail({
+    ...args,
+    subject: n ? `${appName}: ${n === 1 ? "1 change" : `${n} changes`} at ${addressLabel}` : `${appName}: nothing new at ${addressLabel}`,
+    kicker: "Monthly check",
+    preheader: lead.length > 140 ? `${lead.slice(0, 137)}…` : lead,
+    lead,
+  });
 }
