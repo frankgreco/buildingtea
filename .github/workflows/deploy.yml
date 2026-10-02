@@ -1,0 +1,86 @@
+# Deploys to Cloudflare on every push to main (and on demand). Pull requests run
+# check.yml instead. All application secrets live in GitHub Actions secrets and are
+# pushed into the Worker on each deploy, so this repo plus GitHub is the whole system.
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN   (Workers Scripts:Edit, D1:Edit, Workers KV Storage:Edit, Account Settings:Read)
+#   CLOUDFLARE_ACCOUNT_ID
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_REPORT, STRIPE_PRICE_WATCH
+# Optional repository secrets:
+#   SOCRATA_APP_TOKEN, RESEND_API_KEY, OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build, migrate, deploy
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # version comes from "packageManager" in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and test
+        run: pnpm run typecheck && pnpm test
+
+      - name: Build frontend
+        run: pnpm run build
+
+      - name: Apply D1 migrations
+        run: pnpm exec wrangler d1 migrations apply buildingtea --remote
+
+      - name: Push Worker secrets
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          STRIPE_PRICE_REPORT: ${{ secrets.STRIPE_PRICE_REPORT }}
+          STRIPE_PRICE_WATCH: ${{ secrets.STRIPE_PRICE_WATCH }}
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          # Only non-empty values are pushed, so optional secrets can stay unset.
+          node -e '
+            const names = ["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PRICE_REPORT","STRIPE_PRICE_WATCH","SOCRATA_APP_TOKEN","RESEND_API_KEY","OPENAI_API_KEY","OPENAI_BASE_URL","LLM_MODEL"];
+            const out = {};
+            for (const n of names) if (process.env[n]) out[n] = process.env[n];
+            const missing = ["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PRICE_REPORT","STRIPE_PRICE_WATCH"].filter(n => !out[n]);
+            if (missing.length) { console.error("Missing required secrets: " + missing.join(", ")); process.exit(1); }
+            require("fs").writeFileSync("secrets.json", JSON.stringify(out));
+          '
+          pnpm exec wrangler secret bulk secrets.json
+          rm -f secrets.json
+
+      - name: Deploy Worker
+        run: pnpm exec wrangler deploy
+
+      - name: Smoke test
+        run: |
+          sleep 5
+          curl --fail --silent --show-error "https://buildingtea.nyc/api/health" || echo "custom domain not live yet; check the workers.dev URL"

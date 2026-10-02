@@ -1,0 +1,69 @@
+// BuildingTea Worker configuration. This file IS the infrastructure definition:
+// the Worker, its static assets, the D1 database, the KV cache, the rate limiter,
+// the nightly cron and the custom domains are all declared here and applied by
+// `wrangler deploy`. See README.md "Deploying" for the one-time setup steps.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "buildingtea",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Frontend build output. The Worker runs first on every request (so the host
+  // redirect and /api/* work), then hands non-API paths to the asset server.
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+
+  "vars": {
+    "APP_NAME": "BuildingTea",
+    "CANONICAL_HOST": "buildingtea.nyc",
+    "EMAIL_FROM": "BuildingTea <hello@buildingtea.nyc>"
+  },
+
+  // Secrets (set with `wrangler secret put NAME`, or in .dev.vars locally):
+  //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_REPORT, STRIPE_PRICE_WATCH,
+  //   SOCRATA_APP_TOKEN (optional but recommended), RESEND_API_KEY (optional),
+  //   ANTHROPIC_API_KEY (optional; enables the AI-written summary)
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "buildingtea",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ],
+
+  // Per-IP limit on the expensive endpoint (search fans out ~20 upstream calls).
+  "ratelimits": [
+    {
+      "name": "SEARCH_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 20, "period": 60 }
+    }
+  ],
+
+  // Nightly watch diff, 06:15 America/New_York (10:15 UTC; adjust for DST if you care).
+  "triggers": { "crons": ["15 10 * * *"] },
+
+  // All three domains point at this Worker; the Worker 301s the two aliases
+  // to CANONICAL_HOST. Comment these out until the zones exist in your account.
+  "routes": [
+    { "pattern": "buildingtea.nyc", "custom_domain": true },
+    { "pattern": "buildingtea.com", "custom_domain": true },
+    { "pattern": "buildingteanyc.com", "custom_domain": true }
+  ],
+
+  "observability": { "enabled": true }
+}
