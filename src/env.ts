@@ -13,6 +13,8 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICE_REPORT: string;
   STRIPE_PRICE_WATCH: string;
+  /** BuildingTea's own Customer Portal configuration (bpc_...); without it Stripe uses the account default. */
+  STRIPE_PORTAL_CONFIG?: string;
 
   SOCRATA_APP_TOKEN?: string;
   RESEND_API_KEY?: string;

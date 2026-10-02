@@ -59,7 +59,12 @@ export async function verifyWebhook(env: Env, rawBody: string, signature: string
 }
 
 export async function portalUrl(env: Env, customerId: string, returnUrl: string): Promise<string> {
-  const session = await stripeClient(env).billingPortal.sessions.create({ customer: customerId, return_url: returnUrl });
+  // The account is shared with Essence; pass our own portal configuration so the page says BuildingTea.
+  const session = await stripeClient(env).billingPortal.sessions.create({
+    customer: customerId,
+    return_url: returnUrl,
+    ...(env.STRIPE_PORTAL_CONFIG ? { configuration: env.STRIPE_PORTAL_CONFIG } : {}),
+  });
   return session.url;
 }
 

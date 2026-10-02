@@ -83,7 +83,9 @@ Create a sandbox (`stripe sandbox create` works without an account), make a **re
 STRIPE_SECRET_KEY=rk_test_... APP_URL=https://buildingtea.com pnpm stripe:setup
 ```
 
-It creates the two products (with the tax code Stripe Managed Payments requires), their prices, the webhook endpoint, and a Customer Portal configuration, and prints `STRIPE_PRICE_REPORT`, `STRIPE_PRICE_WATCH` and (on first run) `STRIPE_WEBHOOK_SECRET`. Re-running never duplicates anything. Run it once with a sandbox key (values go in `.dev.vars`) and once with the live key (values go in `.prod.vars`).
+It creates the two products (with the tax code Stripe Managed Payments requires), their prices, the webhook endpoint, and BuildingTea's own Customer Portal configuration, and prints `STRIPE_PRICE_REPORT`, `STRIPE_PRICE_WATCH`, `STRIPE_PORTAL_CONFIG` and (on first run) `STRIPE_WEBHOOK_SECRET`. `STRIPE_PORTAL_CONFIG` is not secret: the live id lives in `wrangler.jsonc` vars and the sandbox id in `.dev.vars`.
+
+The Stripe account is shared with Essence. Webhook endpoints are account-wide, so each app's endpoint also receives the other's checkout and subscription events; BuildingTea ignores sessions with no matching report and subscriptions with no matching watch, and Essence ignores customers that belong to none of its organizations. The portal configuration is passed explicitly on every portal session so BuildingTea customers never see Essence's default portal. Re-running never duplicates anything. Run it once with a sandbox key (values go in `.dev.vars`) and once with the live key (values go in `.prod.vars`).
 
 This account has Stripe **Managed Payments** enabled: Stripe is the merchant of record, adds sales tax at checkout (so a $9 report shows as $9.80 in NYC), and handles tax filing. Every product therefore needs a `tax_code`, which the script sets.
 

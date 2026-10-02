@@ -22,7 +22,11 @@
   "vars": {
     "APP_NAME": "BuildingTea",
     "CANONICAL_HOST": "buildingtea.com",
-    "EMAIL_FROM": "BuildingTea <no-reply@buildingtea.com>"
+    "EMAIL_FROM": "BuildingTea <no-reply@buildingtea.com>",
+    // BuildingTea's own Stripe Customer Portal configuration (live), printed by `pnpm stripe:setup`.
+    // Not secret. The account is shared with Essence, whose default portal would show otherwise;
+    // .dev.vars overrides this with the sandbox id for local work.
+    "STRIPE_PORTAL_CONFIG": "bpc_1UMCFKLMuLBKxJVZuuJpMKJO"
   },
 
   // Secrets (set with `wrangler secret put NAME`, or in .dev.vars locally):

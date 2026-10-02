@@ -59,15 +59,21 @@ async function ensureWebhook(url: string): Promise<{ endpoint: Stripe.WebhookEnd
   return { endpoint, created: true };
 }
 
-/** The customer portal ("manage or cancel" for watches). Created via API so no Dashboard step is needed. */
+/**
+ * The customer portal BuildingTea's "Manage or cancel" links open. Its own configuration,
+ * never the account default: the Stripe account is shared with Essence, whose default
+ * portal says "Manage your Essence subscription". Portal sessions pass this id explicitly
+ * (STRIPE_PORTAL_CONFIG), so creating it doesn't change what Essence's customers see.
+ */
 async function ensurePortal(): Promise<Stripe.BillingPortal.Configuration> {
-  const list = await stripe.billingPortal.configurations.list({ active: true, limit: 10 });
-  const existing = list.data.find((c) => c.metadata?.buildingtea === "portal") ?? list.data.find((c) => c.is_default);
+  const list = await stripe.billingPortal.configurations.list({ active: true, limit: 100 });
+  const existing = list.data.find((c) => c.metadata?.buildingtea === "portal");
   if (existing) return existing;
   return stripe.billingPortal.configurations.create({
-    business_profile: { headline: "Manage your BuildingTea watch" },
+    business_profile: { headline: "Manage your BuildingTea watch", privacy_policy_url: `${appUrl}/privacy`, terms_of_service_url: `${appUrl}/terms` },
     features: {
-      subscription_cancel: { enabled: true, mode: "at_period_end" },
+      // Matches the emails and terms: cancelling stops the next charge, the watch runs through the paid month.
+      subscription_cancel: { enabled: true, mode: "at_period_end", proration_behavior: "none" },
       payment_method_update: { enabled: true },
       invoice_history: { enabled: true },
     },
@@ -90,7 +96,7 @@ async function main() {
   if (created && endpoint.secret) console.log(`STRIPE_WEBHOOK_SECRET=${endpoint.secret}`);
   else console.log(`STRIPE_WEBHOOK_SECRET=<existing endpoint ${endpoint.id}; reveal the signing secret in the Stripe Dashboard>`);
   console.log(`\nWebhook URL: ${endpoint.url}`);
-  console.log(`Customer portal configuration: ${portal.id}${portal.is_default ? " (default)" : ""}`);
+  console.log(`\nNot secret; set in wrangler.jsonc "vars" for live and in .dev.vars for the sandbox:\nSTRIPE_PORTAL_CONFIG=${portal.id}`);
   console.log(`Report: $${(reportCents / 100).toFixed(2)} one-time · Watch: $${(watchCents / 100).toFixed(2)}/month`);
   console.log("\nReminder: Stripe Tax is a separate decision. It needs an active tax registration before it collects anything.");
 }
