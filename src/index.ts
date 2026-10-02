@@ -7,14 +7,16 @@ import type { Env } from "./env";
 import { api } from "./routes/api";
 import { runWatches } from "./scheduled";
 
-const app = new Hono<{ Bindings: Env }>();
+export const app = new Hono<{ Bindings: Env }>();
 
-// Canonical host redirect (buildingtea.com, buildingteanyc.com -> buildingtea.nyc).
+// Canonical host + https redirect (buildingteanyc.com, www hosts, and any plain-http
+// request -> https://buildingtea.com). Local dev and the workers.dev preview are exempt.
 app.use("*", async (c, next) => {
   const url = new URL(c.req.url);
   const host = url.hostname;
   const isLocal = host === "localhost" || host === "127.0.0.1" || host.endsWith(".workers.dev");
-  if (!isLocal && host !== c.env.CANONICAL_HOST) {
+  const insecure = url.protocol === "http:" || c.req.header("x-forwarded-proto") === "http";
+  if (!isLocal && (host !== c.env.CANONICAL_HOST || insecure)) {
     url.hostname = c.env.CANONICAL_HOST;
     url.protocol = "https:";
     url.port = "";

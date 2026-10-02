@@ -20,20 +20,20 @@
 
   "vars": {
     "APP_NAME": "BuildingTea",
-    "CANONICAL_HOST": "buildingtea.nyc",
-    "EMAIL_FROM": "BuildingTea <hello@buildingtea.nyc>"
+    "CANONICAL_HOST": "buildingtea.com",
+    "EMAIL_FROM": "BuildingTea <hello@buildingtea.com>"
   },
 
   // Secrets (set with `wrangler secret put NAME`, or in .dev.vars locally):
   //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_REPORT, STRIPE_PRICE_WATCH,
   //   SOCRATA_APP_TOKEN (optional but recommended), RESEND_API_KEY (optional),
-  //   ANTHROPIC_API_KEY (optional; enables the AI-written summary)
+  //   OPENAI_API_KEY (optional; OpenRouter key that enables the AI-written summary)
 
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "buildingtea",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "c7657936-2d74-4c09-baa0-be93cb418109",
       "migrations_dir": "migrations"
     }
   ],
@@ -41,7 +41,7 @@
   "kv_namespaces": [
     {
       "binding": "CACHE",
-      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+      "id": "26cbf3a6501b4b76b06b6806e61069d2"
     }
   ],
 
@@ -57,12 +57,13 @@
   // Nightly watch diff, 06:15 America/New_York (10:15 UTC; adjust for DST if you care).
   "triggers": { "crons": ["15 10 * * *"] },
 
-  // All three domains point at this Worker; the Worker 301s the two aliases
-  // to CANONICAL_HOST. Comment these out until the zones exist in your account.
+  // Both domains point at this Worker; the Worker 301s the alias (and www) to
+  // CANONICAL_HOST. Add buildingtea.nyc here if that zone is ever acquired.
   "routes": [
-    { "pattern": "buildingtea.nyc", "custom_domain": true },
     { "pattern": "buildingtea.com", "custom_domain": true },
-    { "pattern": "buildingteanyc.com", "custom_domain": true }
+    { "pattern": "www.buildingtea.com", "custom_domain": true },
+    { "pattern": "buildingteanyc.com", "custom_domain": true },
+    { "pattern": "www.buildingteanyc.com", "custom_domain": true }
   ],
 
   "observability": { "enabled": true }

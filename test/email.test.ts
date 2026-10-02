@@ -2,15 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { receiptEmail, sendEmail, watchAlertEmail, watchStartedEmail } from "../src/lib/email";
 
-const env = { APP_NAME: "BuildingTea", EMAIL_FROM: "BuildingTea <hello@buildingtea.nyc>" } as Env;
+const env = { APP_NAME: "BuildingTea", EMAIL_FROM: "BuildingTea <hello@buildingtea.com>" } as Env;
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("email templates", () => {
   it("receipt carries the link and a sharing warning, escaped for html", () => {
-    const m = receiptEmail({ appName: "BuildingTea", addressLabel: "143 WEST 4 STREET <unit 3FW>", link: "https://buildingtea.nyc/r/abc#t=tok" });
+    const m = receiptEmail({ appName: "BuildingTea", addressLabel: "143 WEST 4 STREET <unit 3FW>", link: "https://buildingtea.com/r/abc#t=tok" });
     expect(m.subject).toBe("Your BuildingTea report for 143 WEST 4 STREET <unit 3FW>");
-    expect(m.text).toContain("https://buildingtea.nyc/r/abc#t=tok");
+    expect(m.text).toContain("https://buildingtea.com/r/abc#t=tok");
     expect(m.html).toContain("&lt;unit 3FW&gt;");
     expect(m.html).not.toContain("<unit 3FW>");
   });

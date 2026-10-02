@@ -2,7 +2,7 @@
 
 Paste a New York City address, get a plain-English report on the building from the city's own public records: open violations, heat complaints, bedbugs, elevators, who the landlord is, and any court cases. Free to look up; pay once to unlock the full report, or subscribe to watch the building for changes.
 
-- Canonical site: `buildingtea.nyc` (`buildingtea.com` and `buildingteanyc.com` redirect there)
+- Canonical site: `buildingtea.com` (`buildingteanyc.com` and the `www.` hosts redirect there)
 - Data map and verification notes: [`docs/RESEARCH.md`](docs/RESEARCH.md)
 - Status rules: [`docs/RULES.md`](docs/RULES.md)
 
@@ -62,10 +62,12 @@ Requirements: Node 22+, pnpm (via corepack), a Cloudflare account (free), a Stri
 
 ```bash
 pnpm install
-cp .dev.vars.example .dev.vars        # fill in the Stripe values (see Stripe setup)
+cp .dev.vars.example .dev.vars        # sandbox Stripe values (see Stripe setup)
 pnpm migrate:local                    # creates the local D1 database
 pnpm dev                              # builds the frontend and starts wrangler dev on :8787
 ```
+
+Two secret files, both gitignored: `.dev.vars` holds **sandbox** values and is what `wrangler dev` reads; `.prod.vars` holds **live** values and is what gets pushed to the deployed Worker (`pnpm exec wrangler secret bulk .prod.vars`) and copied into GitHub Actions secrets. Never put a live key in `.dev.vars`.
 
 `pnpm dev:web` runs Vite with hot reload on :5173, proxying `/api` to the Worker.
 
@@ -78,12 +80,12 @@ To exercise Stripe locally, forward webhooks: `stripe listen --forward-to localh
 Create a sandbox (`stripe sandbox create` works without an account), make a **restricted** API key with write access to Products, Prices, Checkout Sessions, Customers, Webhook Endpoints and Customer Portal, then:
 
 ```bash
-STRIPE_SECRET_KEY=rk_test_... APP_URL=https://buildingtea.nyc pnpm stripe:setup
+STRIPE_SECRET_KEY=rk_test_... APP_URL=https://buildingtea.com pnpm stripe:setup
 ```
 
-It prints `STRIPE_PRICE_REPORT`, `STRIPE_PRICE_WATCH` and (on first run) `STRIPE_WEBHOOK_SECRET`. Re-running never duplicates anything. Enable the customer portal once in the Stripe Dashboard (Settings → Billing → Customer portal). Repeat with a live key when you go live.
+It creates the two products (with the tax code Stripe Managed Payments requires), their prices, the webhook endpoint, and a Customer Portal configuration, and prints `STRIPE_PRICE_REPORT`, `STRIPE_PRICE_WATCH` and (on first run) `STRIPE_WEBHOOK_SECRET`. Re-running never duplicates anything. Run it once with a sandbox key (values go in `.dev.vars`) and once with the live key (values go in `.prod.vars`).
 
-If you charge US customers you may need to collect sales tax; that is a separate decision (Stripe Tax needs an active registration before it collects anything).
+This account has Stripe **Managed Payments** enabled: Stripe is the merchant of record, adds sales tax at checkout (so a $9 report shows as $9.80 in NYC), and handles tax filing. Every product therefore needs a `tax_code`, which the script sets.
 
 ## Deploying
 
@@ -94,7 +96,7 @@ pnpm exec wrangler d1 create buildingtea          # paste database_id into wrang
 pnpm exec wrangler kv namespace create CACHE      # paste id into wrangler.jsonc
 ```
 
-Add the three domains to your Cloudflare account (zones), then leave the `routes` block in `wrangler.jsonc` as is; `wrangler deploy` attaches them as custom domains. Until the zones exist, comment that block out and use the `*.workers.dev` URL.
+Both domains must be zones in your Cloudflare account (buying through Cloudflare Registrar does this). `wrangler deploy` then attaches them as custom domains from the `routes` block in `wrangler.jsonc` and issues certificates. The Worker redirects every non-canonical host to `buildingtea.com`, so there is one origin and no CORS.
 
 In GitHub, create a `production` environment and add these repository secrets:
 
@@ -107,9 +109,7 @@ In GitHub, create a `production` environment and add these repository secrets:
 | `STRIPE_PRICE_REPORT`, `STRIPE_PRICE_WATCH` | yes | from `stripe:setup` |
 | `SOCRATA_APP_TOKEN` | recommended | free; register at data.cityofnewyork.us → profile → Developer Settings |
 | `RESEND_API_KEY` | recommended | without it, emails are logged, not sent |
-| `OPENAI_API_KEY` | optional | OpenRouter key; enables the AI-written summary for paid reports |
-| `OPENAI_BASE_URL` | optional | defaults to `https://openrouter.ai/api/v1` |
-| `LLM_MODEL` | optional | defaults to `anthropic/claude-fable-5.1`; confirm the slug on openrouter.ai/models |
+| `OPENAI_API_KEY` | optional | OpenRouter key; enables the AI-written summary for paid reports. Model and endpoint are fixed in `src/lib/llm.ts` (`anthropic/claude-fable-5.1`) |
 
 Every push to `main` runs `.github/workflows/deploy.yml`: typecheck, tests, frontend build, D1 migrations, push secrets into the Worker, deploy, smoke test. Pull requests run `check.yml` with no secrets.
 

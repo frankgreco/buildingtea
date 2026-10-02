@@ -17,10 +17,8 @@ export interface Env {
   SOCRATA_APP_TOKEN?: string;
   RESEND_API_KEY?: string;
 
-  /** OpenRouter (OpenAI-compatible). Summary rewrite is skipped when unset. */
+  /** OpenRouter key (OpenAI-compatible API). Summary rewrite is skipped when unset. */
   OPENAI_API_KEY?: string;
-  OPENAI_BASE_URL?: string;
-  LLM_MODEL?: string;
 }
 
 /** Cloudflare's rate limiting binding (declared under "ratelimits" in wrangler.jsonc). */

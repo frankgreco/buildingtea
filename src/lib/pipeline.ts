@@ -96,7 +96,7 @@ export async function enhanceSummary(env: Env, reportId: string): Promise<void> 
   if (report.summarySource === "ai") return;
   try {
     const result = await rewriteSummary(
-      { apiKey: env.OPENAI_API_KEY, baseUrl: env.OPENAI_BASE_URL, model: env.LLM_MODEL, appUrl: `https://${env.CANONICAL_HOST}`, appName: env.APP_NAME },
+      { apiKey: env.OPENAI_API_KEY, appUrl: `https://${env.CANONICAL_HOST}`, appName: env.APP_NAME },
       { address: report.address, cover: report.cover, counts: report.counts, ownership: report.ownership, bedbugs: report.bedbugs, cards: report.cards },
       report.summary,
     );

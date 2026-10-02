@@ -6,9 +6,8 @@
 
 import type { SummaryFacts } from "./summary";
 
-export const DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1";
-/** OpenRouter model slug. Override with LLM_MODEL; check https://openrouter.ai/models for the exact id. */
-export const DEFAULT_LLM_MODEL = "anthropic/claude-fable-5.1";
+export const LLM_BASE_URL = "https://openrouter.ai/api/v1";
+export const LLM_MODEL = "anthropic/claude-fable-5.1";
 
 const SYSTEM = `You write the opening paragraph of a report that helps a New York City renter decide whether to sign a lease on an apartment in a specific building.
 
@@ -23,8 +22,6 @@ Rules:
 
 export interface LlmConfig {
   apiKey: string;
-  baseUrl?: string;
-  model?: string;
   /** Sent as HTTP-Referer / X-Title so OpenRouter attributes usage to the app. */
   appUrl?: string;
   appName?: string;
@@ -44,8 +41,6 @@ interface ChatCompletion {
 
 export async function rewriteSummary(cfg: LlmConfig, facts: SummaryFacts, draft: string): Promise<LlmResult | null> {
   const f = cfg.fetcher ?? fetch;
-  const base = (cfg.baseUrl ?? DEFAULT_LLM_BASE_URL).replace(/\/$/, "");
-  const model = cfg.model ?? DEFAULT_LLM_MODEL;
   const payload = {
     draft,
     facts: {
@@ -61,11 +56,11 @@ export async function rewriteSummary(cfg: LlmConfig, facts: SummaryFacts, draft:
   if (cfg.appUrl) headers["HTTP-Referer"] = cfg.appUrl;
   if (cfg.appName) headers["X-Title"] = cfg.appName;
 
-  const res = await f(`${base}/chat/completions`, {
+  const res = await f(`${LLM_BASE_URL}/chat/completions`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      model,
+      model: LLM_MODEL,
       max_tokens: 1024,
       temperature: 0.3,
       messages: [
@@ -85,5 +80,5 @@ export async function rewriteSummary(cfg: LlmConfig, facts: SummaryFacts, draft:
   const allowed = new Set(JSON.stringify(payload).match(/\d+/g) ?? []);
   const numbers = text.match(/\d+/g) ?? [];
   if (numbers.some((n) => !allowed.has(n))) return null;
-  return { text, model: body.model ?? model };
+  return { text, model: body.model ?? LLM_MODEL };
 }

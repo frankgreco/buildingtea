@@ -2,7 +2,7 @@
 // webhook endpoint if they don't exist, then prints the env values to store as
 // GitHub Actions secrets. Safe to re-run; it never duplicates.
 //
-//   STRIPE_SECRET_KEY=rk_test_... APP_URL=https://buildingtea.nyc npm run stripe:setup
+//   STRIPE_SECRET_KEY=rk_test_... APP_URL=https://buildingtea.com pnpm stripe:setup
 //
 // Optional: REPORT_PRICE_CENTS (default 900), WATCH_PRICE_CENTS (default 300, monthly).
 // Use a sandbox key first (`stripe sandbox create` gives you one with no account).
@@ -14,7 +14,7 @@ if (!key) {
   console.error("Set STRIPE_SECRET_KEY (a restricted key, rk_..., with write access to Products, Prices and Webhook Endpoints).");
   process.exit(1);
 }
-const appUrl = (process.env.APP_URL ?? "https://buildingtea.nyc").replace(/\/$/, "");
+const appUrl = (process.env.APP_URL ?? "https://buildingtea.com").replace(/\/$/, "");
 const reportCents = Number(process.env.REPORT_PRICE_CENTS ?? 900);
 const watchCents = Number(process.env.WATCH_PRICE_CENTS ?? 300);
 
@@ -57,7 +57,25 @@ async function ensureWebhook(url: string): Promise<{ endpoint: Stripe.WebhookEnd
   return { endpoint, created: true };
 }
 
+/** The customer portal ("manage or cancel" for watches). Created via API so no Dashboard step is needed. */
+async function ensurePortal(): Promise<Stripe.BillingPortal.Configuration> {
+  const list = await stripe.billingPortal.configurations.list({ active: true, limit: 10 });
+  const existing = list.data.find((c) => c.metadata?.buildingtea === "portal") ?? list.data.find((c) => c.is_default);
+  if (existing) return existing;
+  return stripe.billingPortal.configurations.create({
+    business_profile: { headline: "Manage your BuildingTea watch" },
+    features: {
+      subscription_cancel: { enabled: true, mode: "at_period_end" },
+      payment_method_update: { enabled: true },
+      invoice_history: { enabled: true },
+    },
+    default_return_url: appUrl,
+    metadata: { buildingtea: "portal" },
+  });
+}
+
 async function main() {
+  const portal = await ensurePortal();
   const report = await ensureProduct("report", "BuildingTea building report", "One-time: the full plain-English report for one NYC building, with an emailed link and PDF.");
   const watch = await ensureProduct("watch", "BuildingTea building watch", "Monthly: nightly checks of one NYC building's city records with email alerts when anything changes.");
   const reportPrice = await ensurePrice(report, reportCents, false);
@@ -70,6 +88,7 @@ async function main() {
   if (created && endpoint.secret) console.log(`STRIPE_WEBHOOK_SECRET=${endpoint.secret}`);
   else console.log(`STRIPE_WEBHOOK_SECRET=<existing endpoint ${endpoint.id}; reveal the signing secret in the Stripe Dashboard>`);
   console.log(`\nWebhook URL: ${endpoint.url}`);
+  console.log(`Customer portal configuration: ${portal.id}${portal.is_default ? " (default)" : ""}`);
   console.log(`Report: $${(reportCents / 100).toFixed(2)} one-time · Watch: $${(watchCents / 100).toFixed(2)}/month`);
   console.log("\nReminder: Stripe Tax is a separate decision. It needs an active tax registration before it collects anything.");
 }

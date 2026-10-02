@@ -7,7 +7,7 @@
 #   CLOUDFLARE_ACCOUNT_ID
 #   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_REPORT, STRIPE_PRICE_WATCH
 # Optional repository secrets:
-#   SOCRATA_APP_TOKEN, RESEND_API_KEY, OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
+#   SOCRATA_APP_TOKEN, RESEND_API_KEY, OPENAI_API_KEY
 
 name: Deploy
 
@@ -62,12 +62,10 @@ jobs:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           # Only non-empty values are pushed, so optional secrets can stay unset.
           node -e '
-            const names = ["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PRICE_REPORT","STRIPE_PRICE_WATCH","SOCRATA_APP_TOKEN","RESEND_API_KEY","OPENAI_API_KEY","OPENAI_BASE_URL","LLM_MODEL"];
+            const names = ["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PRICE_REPORT","STRIPE_PRICE_WATCH","SOCRATA_APP_TOKEN","RESEND_API_KEY","OPENAI_API_KEY"];
             const out = {};
             for (const n of names) if (process.env[n]) out[n] = process.env[n];
             const missing = ["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PRICE_REPORT","STRIPE_PRICE_WATCH"].filter(n => !out[n]);
@@ -83,4 +81,4 @@ jobs:
       - name: Smoke test
         run: |
           sleep 5
-          curl --fail --silent --show-error "https://buildingtea.nyc/api/health" || echo "custom domain not live yet; check the workers.dev URL"
+          curl --fail --silent --show-error "https://buildingtea.com/api/health"
