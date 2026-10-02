@@ -3,6 +3,7 @@
 // Design notes: docs/RESEARCH.md section 1.
 
 import type { Candidate } from "@shared/types";
+import { splitUnit } from "@shared/address";
 
 export const GEOSEARCH_BASE = "https://geosearch.planninglabs.nyc/v2";
 
@@ -73,23 +74,10 @@ export interface NormalizedAddress {
  * - flag intersections, which GeoSearch cannot geocode
  */
 export function normalizeAddress(input: string): NormalizedAddress {
-  let text = input.replace(/\s+/g, " ").trim();
-
-  // Unit: "#34E", "Apt 3B", "Unit 12", "Ste 400", "Fl 3", "3FW" after a street type.
-  let unit: string | null = null;
-  const unitRe = /(?:#|\bapt\.?|\bapartment|\bunit|\bste\.?|\bsuite|\bfl\.?|\bfloor|\brm\.?|\broom)\s*([0-9A-Za-z-]+)/i;
-  const m = unitRe.exec(text);
-  if (m) {
-    unit = m[1]!.toUpperCase();
-    text = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
-  } else {
-    const trailing = /\b(st|street|ave|avenue|rd|road|pl|place|blvd|boulevard|dr|drive|ln|lane|ct|court|pkwy|parkway|ter|terrace|way|sq|square|plaza|plz|concourse|expy|broadway|bowery)\b\.?\s+([0-9]{1,3}[A-Za-z]{1,3}|[A-Za-z]{1,2}[0-9]{1,3})\b/i;
-    const t = trailing.exec(text);
-    if (t) {
-      unit = t[2]!.toUpperCase();
-      text = (text.slice(0, t.index + t[1]!.length) + text.slice(t.index + t[0].length)).trim();
-    }
-  }
+  // Unit first ("#34E", "Apt 3B", "3FW" after the street type). Shared with the browser autocomplete.
+  const split = splitUnit(input);
+  let text = split.text;
+  const unit = split.unit;
 
   // Zip
   let zip: string | null = null;

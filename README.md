@@ -15,7 +15,7 @@ address ──▶ GeoSearch ──▶ BIN + BBL ──▶ ~22 parallel NYC Open 
    full report  ◀── GET /api/report/:id  + Authorization: Bearer <token>
 ```
 
-1. `POST /api/search` resolves the address with NYC Planning's GeoSearch, fans out the Socrata queries listed in `src/lib/datasets.ts`, computes the report (`src/lib/compute.ts`), stores it, and returns only the teaser.
+1. As the user types, the browser asks GeoSearch's autocomplete endpoint directly (free, no key, CORS-open; `shared/suggest.ts`, `web/src/autocomplete.ts`) and shows a dropdown of real NYC addresses, so what gets submitted is something we can resolve. `POST /api/search` then resolves the address with NYC Planning's GeoSearch, fans out the Socrata queries listed in `src/lib/datasets.ts`, computes the report (`src/lib/compute.ts`), stores it, and returns only the teaser.
 2. The page shows the teaser: building facts, record counts, the six questions locked, the first sentence of the summary.
 3. `POST /api/checkout` creates a Stripe Checkout Session with the report id as `client_reference_id`.
 4. Stripe redirects back to `/r/:id?session_id=…`. The page calls `GET /api/report/:id/claim`, which verifies the session with Stripe, fulfils idempotently, and returns an access token. The Stripe webhook does the same fulfilment and is the source of truth if the user never lands on the success page.

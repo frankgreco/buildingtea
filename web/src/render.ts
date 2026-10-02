@@ -1,6 +1,7 @@
 // All page rendering. Data in, DOM out. No framework: three views and a handful of
 // partials are not worth a dependency.
 
+import { attachAutocomplete } from "./autocomplete";
 import type { Candidate, Card, LineItem, Report, Status, Teaser } from "@shared/types";
 import { checkout } from "./api";
 import { complaintsChart, violationsChart } from "./charts";
@@ -21,17 +22,51 @@ const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("
 
 // ---------- partials ----------
 
-function topbar(onNew: () => void): HTMLElement {
+// The mark (web/public/favicon.svg) inlined so its ink follows the colour scheme.
+function markSvg(): string {
+  const windows = ([x0, y0, cols, rowsN, dx]: number[]) => {
+    let out = "";
+    for (let r = 0; r < rowsN!; r++) for (let c = 0; c < cols!; c++) out += `<rect x="${x0! + c * dx!}" y="${y0! + r * 12}" width="6" height="6"/>`;
+    return out;
+  };
+  const cup = "M44 118H176L164 180a14 14 0 0 1-14 12H70a14 14 0 0 1-14-12Z";
+  const handle = "M174 134h12a22 22 0 0 1 0 44h-20";
+  return `<svg class="mark" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(-22 -22)">
+    <g class="f-ink"><rect x="64" y="58" width="24" height="60" rx="5"/><rect x="94" y="30" width="30" height="88" rx="5"/><rect x="130" y="72" width="22" height="46" rx="5"/></g>
+    <g fill="#ffd84d">${windows([69, 66, 2, 4, 9])}${windows([101, 38, 2, 6, 11])}${windows([135, 80, 2, 3, 9])}</g>
+    <path class="f-ink" d="${cup}" transform="translate(6 6)"/>
+    <path class="s-ink" d="${handle}" stroke-width="18" stroke-linecap="round"/><path class="s-accent" d="${handle}" stroke-width="7" stroke-linecap="round"/>
+    <path class="cup" d="${cup}" stroke-width="6" stroke-linejoin="round"/>
+    <rect class="saucer" x="28" y="196" width="164" height="12" rx="6" stroke-width="5"/>
+  </g></svg>`;
+}
+
+function brandHtml(link = true): string {
+  const tag = link ? "a" : "span";
+  return `<${tag} class="brand"${link ? ' href="/"' : ""}>${markSvg()}<span class="word">Building<em>Tea</em><i class="nyc">NYC</i></span></${tag}>`;
+}
+
+function topbar(onNew: () => void, opts: { newSearch?: boolean } = {}): HTMLElement {
   const div = document.createElement("div");
   div.className = "top";
-  div.innerHTML = `<a class="brand" href="/"><span class="dot">⌂</span> BuildingTea</a><button class="pill-btn" type="button">New search</button>`;
+  div.innerHTML = `${brandHtml()}${opts.newSearch === false ? "" : `<button class="pill-btn" type="button">New search</button>`}`;
   div.querySelector("a")!.onclick = (e) => {
     e.preventDefault();
     onNew();
   };
-  div.querySelector("button")!.onclick = onNew;
+  const btn = div.querySelector("button");
+  if (btn) btn.onclick = onNew;
   return div;
 }
+
+const PERKS: { key: Card["key"]; title: string; blurb: string }[] = [
+  { key: "safe", title: "Is it safe?", blurb: "Open hazardous conditions, with dates, so stale ones don't scare you." },
+  { key: "heat", title: "Heat, water & plumbing?", blurb: "Heat and hot water complaints, month by month." },
+  { key: "pests", title: "Pests & bedbugs?", blurb: "The landlord's required annual bedbug filing and any pest violations." },
+  { key: "elev", title: "Elevators?", blurb: "Elevator devices on file and open complaints about them." },
+  { key: "owner", title: "Who's the landlord?", blurb: "The registered owner and managing agent, and whether the registration is current." },
+  { key: "legal", title: "Any legal trouble?", blurb: "Court cases, city fines, vacate orders, evictions." },
+];
 
 function hero(t: Teaser | Report): string {
   const a = t.address,
@@ -46,8 +81,7 @@ function hero(t: Teaser | Report): string {
   if (c.historicDistrict) facts.push(["Extra", "Historic district"]);
   const street = `${a.houseNumber} ${titleCase(a.street)}`.trim();
   return `<header class="hero">
-    <div class="kicker">Building report · ${esc(fmtDate(t.generatedAt))}</div>
-    <h1><span class="hl">${esc(street || a.label)}</span>${a.unit ? `<span class="unit-chip">#${esc(a.unit)}</span>` : ""}</h1>
+    <h1><span class="hl">${esc(street || a.label)}</span>${a.unit ? ` <span class="unit-chip">#${esc(a.unit)}</span>` : ""}</h1>
     <div class="sub">${esc([a.borough, a.zip].filter(Boolean).join(" "))}${a.lotOnly ? " · lot-level data only" : ""}</div>
     <div class="facts">${facts.map(([k, v]) => `<div class="fact"><small>${esc(k)}</small>${esc(v)}</div>`).join("")}</div>
   </header>`;
@@ -109,39 +143,34 @@ function sourcesHtml(t: Teaser | Report): string {
 
 export function renderSearch(root: HTMLElement, opts: { onSubmit: (address: string) => void; busy?: boolean; value?: string; error?: string }) {
   root.innerHTML = "";
-  root.appendChild(topbar(() => renderSearch(root, { onSubmit: opts.onSubmit })));
+  root.appendChild(topbar(() => renderSearch(root, { onSubmit: opts.onSubmit }), { newSearch: false }));
   const div = document.createElement("div");
   div.innerHTML = `<header class="hero home">
-      <div class="kicker">NYC apartments</div>
       <h1>Know the <span class="hl">building</span> before you sign.</h1>
-      <p class="sub big">Paste the address of any New York City apartment. We pull the city's own records on violations, heat, bedbugs, elevators, the landlord, and court cases, and explain them in plain English.</p>
     </header>
     <form class="card search" id="searchForm">
       <label for="addr" class="kicker">Street address</label>
-      <input id="addr" name="address" type="text" inputmode="text" autocomplete="street-address" placeholder="143 W 4th St #3FW, New York, NY" value="${esc(opts.value ?? "")}" ${opts.busy ? "disabled" : ""} required minlength="5" maxlength="200">
-      <button class="btn primary" type="submit" ${opts.busy ? "disabled" : ""}>${opts.busy ? "Checking the city's records…" : "Check this building"}</button>
+      <div class="ac"><input id="addr" name="address" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="143 W 4th St #3FW, New York, NY" value="${esc(opts.value ?? "")}" ${opts.busy ? "disabled" : ""} required minlength="5" maxlength="200"></div>
+      <button class="btn primary" type="submit" ${opts.busy ? "disabled" : ""}>${opts.busy ? "Checking the city's records…" : "Uncover the tea"}</button>
       ${opts.error ? `<p class="err" role="alert">${esc(opts.error)}</p>` : ""}
-      <p class="fine">Include the borough or zip. Apartment number optional but useful.</p>
     </form>
     <section class="card">
       <h2>What you get</h2>
-      <ul class="plain">
-        <li><b>Is it safe?</b> Open hazardous conditions, with dates, so stale ones don't scare you.</li>
-        <li><b>Does the heat work?</b> Heat and hot water complaints, month by month.</li>
-        <li><b>Pests & bedbugs.</b> The landlord's required annual bedbug report and any pest violations.</li>
-        <li><b>Who's the landlord?</b> The registered owner and managing agent, and whether the registration is current.</li>
-        <li><b>Any legal trouble?</b> Court cases, city fines, vacate orders, evictions.</li>
-      </ul>
+      <div class="perks">${PERKS.map((p) => `<div class="perk"><div class="icon" aria-hidden="true">${CARD_ICON[p.key]}</div><b>${esc(p.title)}</b><span>${esc(p.blurb)}</span></div>`).join("")}</div>
     </section>
     <p class="fine center">Free to look up. Pay once to unlock the full report, or watch the building for alerts.</p>`;
   root.appendChild(div);
   const form = div.querySelector<HTMLFormElement>("#searchForm")!;
+  const addr = div.querySelector<HTMLInputElement>("#addr")!;
   form.onsubmit = (e) => {
     e.preventDefault();
-    const v = (div.querySelector<HTMLInputElement>("#addr")!.value || "").trim();
+    const v = addr.value.trim();
     if (v.length >= 5) opts.onSubmit(v);
   };
-  if (!opts.busy) div.querySelector<HTMLInputElement>("#addr")?.focus();
+  if (!opts.busy) {
+    attachAutocomplete(addr, opts.onSubmit);
+    addr.focus();
+  }
 }
 
 export function renderCandidates(root: HTMLElement, message: string, candidates: Candidate[], onPick: (label: string) => void) {
@@ -167,7 +196,7 @@ export function renderCandidates(root: HTMLElement, message: string, candidates:
 }
 
 export function renderUnlocking(root: HTMLElement) {
-  root.innerHTML = `<div class="top"><span class="brand"><span class="dot">⌂</span> BuildingTea</span></div>
+  root.innerHTML = `<div class="top">${brandHtml(false)}</div>
     <div class="card center"><h2>Unlocking your report…</h2><p class="chart-sub">Confirming the payment with Stripe. This takes a second or two.</p><div class="spinner" aria-hidden="true"></div></div>`;
 }
 

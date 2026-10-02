@@ -26,12 +26,18 @@ export async function sendEmail(env: Env, mail: Mail): Promise<void> {
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
+/** Shared HTML frame: the logo on top, system font, comfortable width. The logo is the hosted PNG on the report link's origin. */
+function layout(link: string, body: string): string {
+  const logo = new URL("/logo-email.png", link).toString();
+  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#16142b;font-size:16px;line-height:1.5"><img src="${esc(logo)}" width="270" height="75" alt="BuildingTea NYC" style="display:block;margin:0 0 18px">${body}</div>`;
+}
+
 export function receiptEmail(args: { appName: string; addressLabel: string; link: string }): Omit<Mail, "to"> {
   const { appName, addressLabel, link } = args;
   return {
     subject: `Your ${appName} report for ${addressLabel}`,
     text: `Here is your building report for ${addressLabel}:\n\n${link}\n\nThis link is your key to the report. Anyone with it can open it, so share it with roommates on purpose, not by accident.\n\nThe report re-checks the city's records every time you open it.`,
-    html: `<p>Here is your building report for <strong>${esc(addressLabel)}</strong>:</p><p><a href="${esc(link)}">${esc(link)}</a></p><p>This link is your key to the report. Anyone with it can open it, so share it with roommates on purpose, not by accident.</p><p>The report re-checks the city's records every time you open it.</p>`,
+    html: layout(link, `<p>Here is your building report for <strong>${esc(addressLabel)}</strong>:</p><p><a href="${esc(link)}">${esc(link)}</a></p><p>This link is your key to the report. Anyone with it can open it, so share it with roommates on purpose, not by accident.</p><p>The report re-checks the city's records every time you open it.</p>`),
   };
 }
 
@@ -40,7 +46,7 @@ export function watchStartedEmail(args: { appName: string; addressLabel: string;
   return {
     subject: `${appName} is now watching ${addressLabel}`,
     text: `We'll check the city's records for ${addressLabel} every night and email you when something changes: new hazardous conditions, city fines, vacate orders, court cases, bedbug reports, or a change of landlord.\n\nYour report: ${link}\nManage or cancel: ${manageUrl}`,
-    html: `<p>We'll check the city's records for <strong>${esc(addressLabel)}</strong> every night and email you when something changes: new hazardous conditions, city fines, vacate orders, court cases, bedbug reports, or a change of landlord.</p><p>Your report: <a href="${esc(link)}">${esc(link)}</a></p><p><a href="${esc(manageUrl)}">Manage or cancel</a></p>`,
+    html: layout(link, `<p>We'll check the city's records for <strong>${esc(addressLabel)}</strong> every night and email you when something changes: new hazardous conditions, city fines, vacate orders, court cases, bedbug reports, or a change of landlord.</p><p>Your report: <a href="${esc(link)}">${esc(link)}</a></p><p><a href="${esc(manageUrl)}">Manage or cancel</a></p>`),
   };
 }
 
@@ -50,6 +56,6 @@ export function watchAlertEmail(args: { appName: string; addressLabel: string; l
   return {
     subject: `${appName}: something changed at ${addressLabel}`,
     text: `Overnight changes in the city's records for ${addressLabel}:\n\n${list}\n\nSee the full report: ${link}`,
-    html: `<p>Overnight changes in the city's records for <strong>${esc(addressLabel)}</strong>:</p><ul>${changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul><p><a href="${esc(link)}">See the full report</a></p>`,
+    html: layout(link, `<p>Overnight changes in the city's records for <strong>${esc(addressLabel)}</strong>:</p><ul>${changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul><p><a href="${esc(link)}">See the full report</a></p>`),
   };
 }

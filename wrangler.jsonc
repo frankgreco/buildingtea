@@ -57,6 +57,10 @@
   // Nightly watch diff, 06:15 America/New_York (10:15 UTC; adjust for DST if you care).
   "triggers": { "crons": ["15 10 * * *"] },
 
+  // Local dev: wrangler otherwise presents the first route's host (buildingtea.com)
+  // on plain http, which the canonical-host middleware would 301 to production.
+  "dev": { "port": 8787, "host": "localhost:8787" },
+
   // Both domains point at this Worker; the Worker 301s the alias (and www) to
   // CANONICAL_HOST. Add buildingtea.nyc here if that zone is ever acquired.
   "routes": [

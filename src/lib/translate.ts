@@ -64,7 +64,8 @@ const HPD_RULES: Rule[] = [
 export function isRealApartment(apt: string | null | undefined): apt is string {
   if (!apt) return false;
   const a = apt.trim().toUpperCase();
-  return a !== "" && a !== "BLDG" && a !== "NA" && a !== "N/A" && a !== "NONE" && a !== "PUBLIC";
+  // BGLD and BLD are common misspellings of BLDG in HPD's data.
+  return a !== "" && a !== "BLDG" && a !== "BGLD" && a !== "BLD" && a !== "NA" && a !== "N/A" && a !== "NONE" && a !== "PUBLIC";
 }
 
 export function hpdWhere(text: string, apartment?: string | null, story?: string | null): string {

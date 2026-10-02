@@ -1,0 +1,28 @@
+# BuildingTea NYC
+
+> Paste any New York City street address and get a plain-English report on the building, built only from the city's own public records: housing violations, heat and hot water complaints, pests and bedbugs, elevators, who the landlord is, and court cases. Free to look up; a one-time purchase unlocks the full report, and an optional monthly "watch" emails you when the city's records for that building change.
+
+BuildingTea is at https://buildingtea.com (buildingteanyc.com redirects there). It covers all five boroughs. There are no user accounts: a purchase is identified by its Stripe checkout session, and the full report is reached through an emailed link. No score or rating is assigned to any building; the report explains the records and says how old they are.
+
+## How it works
+
+- Address lookup uses NYC Planning's GeoSearch to resolve the address to a building (BIN) and tax lot (BBL).
+- The report queries NYC Open Data (data.cityofnewyork.us) live for that building: HPD violations and complaints, HPD registration (owner and managing agent), DOB complaints, ECB/OATH violations, elevator records, bedbug filings, vacate orders, housing court cases, 311 requests, and PLUTO building facts.
+- Every number in a report is traceable to a named public dataset, listed at the bottom of each report with its last-updated date.
+- Reports are generated per search and are not listed publicly; only the home page is in the sitemap.
+
+## Pages
+
+- [Home](https://buildingtea.com/): search box. Type an address and pick the building from the suggestions.
+- Report pages live under /r/ and are created by a search. The free version shows the building facts and record counts; the paid version shows the six questions answered in full.
+
+## Pricing
+
+- Free: look up a building and see the teaser.
+- One-time purchase: the full report for one building.
+- Monthly watch: nightly re-checks of one building with email alerts when something changes, cancel any time.
+
+## Data sources
+
+- NYC Planning GeoSearch: https://geosearch.planninglabs.nyc/docs/
+- NYC Open Data: https://data.cityofnewyork.us/
