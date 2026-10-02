@@ -168,7 +168,7 @@ export interface Teaser {
   sources: SourceStamp[];
 }
 
-/** What the nightly job keeps to detect changes for a watched building. */
+/** What the monthly digest job keeps to detect changes for a watched building. */
 export interface WatchSnapshot {
   generatedAt: string;
   openB: number;

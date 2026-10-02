@@ -231,7 +231,9 @@ export async function fulfil(env: Env, session: Stripe.Checkout.Session, ctx: Wa
   if (created) {
     quiet(enhanceSummary(env, reportId), "summary");
     const manageUrl = `https://${env.CANONICAL_HOST}/api/report/${reportId}/manage?t=${token}`;
-    quiet(sendEmail(env, { to: email, ...watchStartedEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link, manageUrl }) }), "watch email");
+    // Pre-tax recurring amount for the confirmation email; Managed Payments adds sales tax on top at billing time.
+    const monthly = session.amount_subtotal != null && session.currency ? new Intl.NumberFormat("en-US", { style: "currency", currency: session.currency.toUpperCase() }).format(session.amount_subtotal / 100) : null;
+    quiet(sendEmail(env, { to: email, ...watchStartedEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link, manageUrl, monthly }) }), "watch email");
   }
   return { token, plan };
 }

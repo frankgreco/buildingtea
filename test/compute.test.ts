@@ -187,7 +187,7 @@ describe("charts, teaser, snapshots", () => {
     expect(t.summaryLead.endsWith(".")).toBe(true);
   });
 
-  it("diffs snapshots into alert lines", () => {
+  it("diffs snapshots into change lines", () => {
     const a = snapshotOf(build());
     const b = snapshotOf(build({ hpdOpenByClass: [{ class: "C", n: "2" }], hpdOpenItems: [{ class: "C", inspectiondate: "2026-10-01T00:00:00.000", novdescription: "NO HEAT", apartment: "1A" }] }));
     const changes = diffSnapshots(a, b);

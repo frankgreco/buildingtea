@@ -5,6 +5,7 @@ import { attachAutocomplete } from "./autocomplete";
 import type { Candidate, Card, LineItem, Report, Status, Teaser } from "@shared/types";
 import { checkout } from "./api";
 import { complaintsChart, violationsChart } from "./charts";
+import { LEGAL, LEGAL_EFFECTIVE, SUPPORT_EMAIL } from "./legal";
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const STATUS_ICON: Record<Status, string> = { good: "✓", warn: "!", serious: "!", critical: "✕", neutral: "–" };
@@ -57,6 +58,11 @@ function topbar(onNew: () => void, opts: { newSearch?: boolean } = {}): HTMLElem
   const btn = div.querySelector("button");
   if (btn) btn.onclick = onNew;
   return div;
+}
+
+/** Footer on every page: the two legal pages and the support address. data-nav links route client-side (main.ts). */
+function footerHtml(): string {
+  return `<footer class="foot"><a data-nav href="/privacy">Privacy</a><a data-nav href="/terms">Terms</a><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></footer>`;
 }
 
 const PERKS: { key: Card["key"]; title: string; blurb: string }[] = [
@@ -158,7 +164,7 @@ export function renderSearch(root: HTMLElement, opts: { onSubmit: (address: stri
       <h2>What you get</h2>
       <div class="perks">${PERKS.map((p) => `<div class="perk"><div class="icon" aria-hidden="true">${CARD_ICON[p.key]}</div><b>${esc(p.title)}</b><span>${esc(p.blurb)}</span></div>`).join("")}</div>
     </section>
-    <p class="fine center">Free to look up. Pay once to unlock the full report, or watch the building for alerts.</p>`;
+    <p class="fine center">Free to look up. Pay once to unlock the full report, or watch the building for a monthly check-in.</p>${footerHtml()}`;
   root.appendChild(div);
   const form = div.querySelector<HTMLFormElement>("#searchForm")!;
   const addr = div.querySelector<HTMLInputElement>("#addr")!;
@@ -235,6 +241,7 @@ export function renderTeaser(root: HTMLElement, t: Teaser, opts: { onNew: () => 
       .join("")}</div>
     <section class="card locked-chart"><h2>Violations by year · Complaints by month</h2><p class="chart-sub">Twenty years of history and the last two winters, charted. In the full report.</p><div class="ghost-chart" aria-hidden="true"></div></section>
     ${sourcesHtml(t)}
+    ${footerHtml()}
     <div class="cta"><div class="in">
       <button class="btn primary wide" type="button" id="unlock">Unlock the full report<small>one-time payment · link emailed to you</small></button>
     </div></div>`;
@@ -260,12 +267,13 @@ export function renderReport(root: HTMLElement, r: Report, opts: { watchActive: 
     <section class="card"><h2>Check it yourself</h2><p class="chart-sub">These go to the city's own sites for this exact building.</p>
       <div class="links">${r.links.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}<span class="arrow">↗</span></a>`).join("")}</div></section>
     ${sourcesHtml(r)}
+    ${footerHtml()}
     <div class="cta"><div class="in">
       <button class="btn" type="button" id="pdf">Save as PDF<small>share with roommates</small></button>
       ${
         opts.watchActive
           ? `<a class="btn watching" href="/api/report/${esc(r.id)}/manage?t=${esc(opts.token ?? "")}">Watching ✓<small>manage or cancel</small></a>`
-          : `<button class="btn primary" type="button" id="watch">Watch this building<small>alerts when anything changes</small></button>`
+          : `<button class="btn primary" type="button" id="watch">Watch this building<small>what changed, once a month</small></button>`
       }
     </div></div>`;
   root.appendChild(div);
@@ -274,6 +282,17 @@ export function renderReport(root: HTMLElement, r: Report, opts: { watchActive: 
   div.querySelector<HTMLButtonElement>("#pdf")!.onclick = () => window.print();
   const watch = div.querySelector<HTMLButtonElement>("#watch");
   if (watch) watch.onclick = () => startCheckout(watch, r.id, "watch");
+  window.scrollTo({ top: 0 });
+}
+
+export function renderLegal(root: HTMLElement, page: "privacy" | "terms", opts: { onNew: () => void }) {
+  const doc = LEGAL[page];
+  root.innerHTML = "";
+  root.appendChild(topbar(opts.onNew, { newSearch: false }));
+  const div = document.createElement("div");
+  div.innerHTML = `<header class="hero"><h1>${doc.title}</h1><p class="chart-sub">Effective ${LEGAL_EFFECTIVE}</p></header>
+    <section class="card legal">${doc.html}</section>${footerHtml()}`;
+  root.appendChild(div);
   window.scrollTo({ top: 0 });
 }
 

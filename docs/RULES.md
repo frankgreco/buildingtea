@@ -67,6 +67,6 @@ Registration state from `tesw-yqqr`: **current** (end date in the future), **gra
 | 3+ evictions executed in 3 years, or any unpaid city summons balance | Heads up |
 | Otherwise | Looks good |
 
-## Watch alerts
+## Watch digests
 
-The nightly job alerts when any of these increases: open class C, open class B, open complaints, active DOB violations, active summonses, open elevator issues, pending court cases. It also alerts when a vacate order starts or ends, a new bedbug report is filed, the registration state changes, or the registered owner changes.
+The monthly job lists a change when any of these increases: open class C, open class B, open complaints, active DOB violations, active summonses, open elevator issues, pending court cases. It also lists a change when a vacate order starts or ends, a new bedbug report is filed, the registration state changes, or the registered owner changes. The digest goes out every month whether or not anything changed.

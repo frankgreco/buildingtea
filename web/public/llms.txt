@@ -14,13 +14,14 @@ BuildingTea is at https://buildingtea.com (buildingteanyc.com redirects there). 
 ## Pages
 
 - [Home](https://buildingtea.com/): search box. Type an address and pick the building from the suggestions.
+- [Privacy](https://buildingtea.com/privacy) and [Terms](https://buildingtea.com/terms): short plain-English policies. Support: hello@buildingtea.com.
 - Report pages live under /r/ and are created by a search. The free version shows the building facts and record counts; the paid version shows the six questions answered in full.
 
 ## Pricing
 
 - Free: look up a building and see the teaser.
 - One-time purchase: the full report for one building.
-- Monthly watch: nightly re-checks of one building with email alerts when something changes, cancel any time.
+- Monthly watch: once a month, a re-check of the building's city records, a refreshed report, and an email on what changed; cancel any time.
 
 ## Data sources
 

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import { receiptEmail, sendEmail, watchAlertEmail, watchStartedEmail } from "../src/lib/email";
+import { receiptEmail, sendEmail, watchDigestEmail, watchStartedEmail } from "../src/lib/email";
 
-const env = { APP_NAME: "BuildingTea", EMAIL_FROM: "BuildingTea <hello@buildingtea.com>" } as Env;
+const env = { APP_NAME: "BuildingTea", EMAIL_FROM: "BuildingTea <no-reply@buildingtea.com>" } as Env;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -11,16 +11,32 @@ describe("email templates", () => {
     const m = receiptEmail({ appName: "BuildingTea", addressLabel: "143 WEST 4 STREET <unit 3FW>", link: "https://buildingtea.com/r/abc#t=tok" });
     expect(m.subject).toBe("Your BuildingTea report for 143 WEST 4 STREET <unit 3FW>");
     expect(m.text).toContain("https://buildingtea.com/r/abc#t=tok");
-    expect(m.html).toContain("&lt;unit 3FW&gt;");
-    expect(m.html).not.toContain("<unit 3FW>");
+    expect(m.html).toMatch(/&lt;unit 3fw&gt;/i);
+    expect(m.html).not.toMatch(/<unit 3fw>/i);
+    expect(m.html).toContain('href="https://buildingtea.com/r/abc#t=tok"');
+    expect(m.text).not.toContain("re-checks");
   });
 
-  it("watch emails list changes and a manage link", () => {
-    const s = watchStartedEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m" });
+  it("watch confirmation states the price, the renewal, and how to cancel", () => {
+    const s = watchStartedEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m", monthly: "$3.00" });
+    expect(s.text).toContain("$3.00 a month plus any sales tax");
+    expect(s.text).toContain("renews every month until you cancel");
     expect(s.text).toContain("https://m");
-    const a = watchAlertEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", changes: ["Hazardous conditions open: 0 → 2"] });
-    expect(a.subject).toContain("something changed");
-    expect(a.html).toContain("<li>Hazardous conditions open: 0 → 2</li>");
+    expect(s.html).toContain('href="https://m"');
+    const noPrice = watchStartedEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m", monthly: null });
+    expect(noPrice.text).toContain("price shown at checkout");
+  });
+
+  it("monthly digest leads with the summary, lists the changes, and carries the manage link", () => {
+    const d = watchDigestEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m", changes: ["Hazardous conditions open: 0 → 2"], summary: "One new hazardous violation this month." });
+    expect(d.subject).toBe("BuildingTea: 1 change at X");
+    expect(d.text).toContain("One new hazardous violation this month.");
+    expect(d.html).toContain("Hazardous conditions open: 0 → 2");
+    expect(d.html).toContain('href="https://m"');
+    const quiet = watchDigestEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m", changes: [], summary: null });
+    expect(quiet.subject).toBe("BuildingTea: nothing new at X");
+    expect(quiet.text).toContain("Nothing new showed up");
+    expect(quiet.html).not.toContain("What changed");
   });
 });
 

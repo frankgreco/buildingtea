@@ -1,5 +1,5 @@
 // The whole thing: address -> BIN/BBL -> parallel city queries -> Report + Teaser -> D1.
-// Used by the search route (first view) and the nightly watch job (refresh).
+// Used by the search route (first view) and the monthly watch digest (refresh).
 
 import type { Address, Report, SourceStamp, Teaser } from "@shared/types";
 import type { Env } from "../env";

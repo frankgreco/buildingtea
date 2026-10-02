@@ -2,6 +2,9 @@
 
 import type { Report, Teaser, WatchSnapshot } from "@shared/types";
 
+/** Days between watch digests (and from watch start to the first one). */
+export const DIGEST_INTERVAL_DAYS = 30;
+
 export interface ReportRow {
   id: string;
   bin: string;
@@ -36,7 +39,10 @@ export interface WatchRow {
   status: "active" | "past_due" | "canceled";
   last_snapshot_json: string | null;
   last_checked_at: string | null;
+  /** Unused since the monthly digest replaced nightly alerts; kept in the schema. */
   last_alert_at: string | null;
+  last_digest_at: string | null;
+  created_at: string;
 }
 
 export interface TokenRow {
@@ -182,16 +188,32 @@ export class Db {
     return (await this.d1.prepare("SELECT * FROM watches WHERE bin = ?1 AND (unit IS ?2) AND status = 'active' LIMIT 1").bind(bin, unit).first<WatchRow>()) ?? null;
   }
 
-  async listActiveWatches(limit = 200, offset = 0): Promise<WatchRow[]> {
-    const res = await this.d1.prepare("SELECT * FROM watches WHERE status IN ('active','past_due') ORDER BY id LIMIT ?1 OFFSET ?2").bind(limit, offset).all<WatchRow>();
+  /**
+   * Watches whose monthly digest is due: the first one 30 days after the watch started,
+   * then 30 days after the previous digest. Only 'active' watches; past_due watches get
+   * no digest until Stripe collects payment and the webhook flips them back to active.
+   */
+  async listWatchesDue(limit = 50): Promise<WatchRow[]> {
+    // Half a day of slack: without it a watch stamped seconds after a run is not due until the run after the 30-day mark.
+    const cutoff = new Date(Date.now() - (DIGEST_INTERVAL_DAYS * 24 - 12) * 3600_000).toISOString();
+    const res = await this.d1
+      .prepare(
+        `SELECT * FROM watches
+         WHERE status = 'active' AND COALESCE(last_digest_at, created_at) <= ?1
+         ORDER BY COALESCE(last_digest_at, created_at) ASC
+         LIMIT ?2`,
+      )
+      .bind(cutoff, limit)
+      .all<WatchRow>();
     return res.results;
   }
 
-  async updateWatchSnapshot(id: number, snapshot: WatchSnapshot, alerted: boolean): Promise<void> {
+  /** Record a sent digest: the snapshot it was diffed to becomes the baseline for next month. */
+  async markWatchDigested(id: number, snapshot: WatchSnapshot): Promise<void> {
     const now = new Date().toISOString();
     await this.d1
-      .prepare("UPDATE watches SET last_snapshot_json = ?2, last_checked_at = ?3, last_alert_at = CASE WHEN ?4 = 1 THEN ?3 ELSE last_alert_at END WHERE id = ?1")
-      .bind(id, JSON.stringify(snapshot), now, alerted ? 1 : 0)
+      .prepare("UPDATE watches SET last_snapshot_json = ?2, last_checked_at = ?3, last_digest_at = ?3 WHERE id = ?1")
+      .bind(id, JSON.stringify(snapshot), now)
       .run();
   }
 

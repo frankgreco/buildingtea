@@ -556,7 +556,7 @@ export function snapshotOf(report: Report): WatchSnapshot {
   };
 }
 
-/** Human-readable list of what changed between two snapshots; empty when nothing worth an alert. */
+/** Human-readable list of what changed between two snapshots; empty when nothing worth listing in a digest. */
 export function diffSnapshots(prev: WatchSnapshot, next: WatchSnapshot): string[] {
   const out: string[] = [];
   const d = (label: string, a: number, b: number) => {

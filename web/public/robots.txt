@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
+Disallow: /r/
 
 Sitemap: https://buildingtea.com/sitemap.xml

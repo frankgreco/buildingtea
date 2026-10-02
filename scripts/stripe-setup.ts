@@ -28,8 +28,10 @@ async function ensureProduct(slug: "report" | "watch", name: string, description
   const found = await stripe.products.search({ query: `active:'true' AND metadata['buildingtea']:'${slug}'` });
   const existing = found.data[0];
   if (existing) {
-    if (existing.tax_code !== TAX_CODE) return stripe.products.update(existing.id, { tax_code: TAX_CODE });
-    return existing;
+    const update: Stripe.ProductUpdateParams = {};
+    if (existing.tax_code !== TAX_CODE) update.tax_code = TAX_CODE;
+    if (existing.description !== description) update.description = description;
+    return Object.keys(update).length ? stripe.products.update(existing.id, update) : existing;
   }
   return stripe.products.create({ name, description, metadata: { buildingtea: slug }, tax_code: TAX_CODE });
 }
@@ -77,7 +79,7 @@ async function ensurePortal(): Promise<Stripe.BillingPortal.Configuration> {
 async function main() {
   const portal = await ensurePortal();
   const report = await ensureProduct("report", "BuildingTea building report", "One-time: the full plain-English report for one NYC building, with an emailed link and PDF.");
-  const watch = await ensureProduct("watch", "BuildingTea building watch", "Monthly: nightly checks of one NYC building's city records with email alerts when anything changes.");
+  const watch = await ensureProduct("watch", "BuildingTea building watch", "Monthly: a re-check of one NYC building's city records, a refreshed report, and an email on what changed, once a month.");
   const reportPrice = await ensurePrice(report, reportCents, false);
   const watchPrice = await ensurePrice(watch, watchCents, true);
   const { endpoint, created } = await ensureWebhook(`${appUrl}/api/stripe/webhook`);

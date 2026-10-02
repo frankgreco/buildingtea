@@ -1,9 +1,10 @@
-// Tiny router: "/" is the search page, "/r/:id" is a report (teaser or full).
+// Tiny router: "/" is the search page, "/r/:id" is a report (teaser or full),
+// "/privacy" and "/terms" are static pages.
 // The access token travels in the URL hash from emailed links, is stored in
 // localStorage, and is sent as a bearer header on API calls.
 
 import { claim, getReport, getToken, search, setToken } from "./api";
-import { renderCandidates, renderError, renderReport, renderSearch, renderTeaser, renderUnlocking } from "./render";
+import { renderCandidates, renderError, renderLegal, renderReport, renderSearch, renderTeaser, renderUnlocking } from "./render";
 
 const app = document.getElementById("app")!;
 
@@ -14,8 +15,12 @@ function navigate(path: string, replace = false) {
 }
 
 async function route() {
-  const path = location.pathname;
-  const m = /^\/r\/([A-Za-z0-9]{8,32})\/?$/.exec(path);
+  const path = location.pathname.replace(/\/+$/, "") || "/";
+  if (path === "/privacy" || path === "/terms") {
+    renderLegal(app, path.slice(1) as "privacy" | "terms", { onNew: () => navigate("/") });
+    return;
+  }
+  const m = /^\/r\/([A-Za-z0-9]{8,32})$/.exec(path);
   if (!m) {
     renderSearch(app, { onSubmit: onSearch });
     return;
@@ -86,6 +91,14 @@ async function onSearch(address: string) {
   }
   renderSearch(app, { onSubmit: onSearch, value: address, error: res.message });
 }
+
+// In-app links (footer) navigate without a full reload; modified clicks keep browser behaviour.
+document.addEventListener("click", (e) => {
+  const a = (e.target as Element | null)?.closest?.("a[data-nav]");
+  if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  navigate(a.getAttribute("href")!);
+});
 
 window.addEventListener("popstate", route);
 route();
