@@ -67,6 +67,14 @@ Registration state from `tesw-yqqr`: **current** (end date in the future), **gra
 | 3+ evictions executed in 3 years, or any unpaid city summons balance | Heads up |
 | Otherwise | Looks good |
 
-## Watch digests
+## Is it noisy?
 
-The monthly job lists a change when any of these increases: open class C, open class B, open complaints, active DOB violations, active summonses, open elevator issues, pending court cases. It also lists a change when a vacate order starts or ends, a new bedbug report is filed, the registration state changes, or the registered owner changes. The digest goes out every month whether or not anything changed.
+Counts are 311 requests at this lot (`erm2-nwe9` by BBL) in the last 12 months whose `complaint_type` starts with `Noise` (NYPD `Noise - Residential`, `Noise - Street/Sidewalk`, `Noise - Commercial`, `Noise - Vehicle`, ..., EDC `Noise - Helicopter`, DEP `Noise`), summed from the same 12-month aggregate the rest of the report uses.
+
+| Condition | Status |
+|---|---|
+| The 311 query failed | N/A |
+| 10+ noise complaints | Heads up |
+| Otherwise | Looks good |
+
+Never Serious or Critical: 311 noise reports cover the whole lot and the address the caller gave, so some are about neighbors or the street. The answer names the most common noise type; the card's table lists each type with its count.

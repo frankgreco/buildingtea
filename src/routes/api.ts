@@ -1,14 +1,13 @@
-// The HTTP API. Six routes plus a health check. See README "How access works".
+// The HTTP API. Five routes plus a health check. See README "How access works".
 
 import { Hono } from "hono";
 import type Stripe from "stripe";
-import type { CheckoutRequest, CheckoutResponse, ClaimResponse, Report, ReportResponse, SearchRequest, SearchResponse, Teaser } from "@shared/types";
+import type { CheckoutRequest, CheckoutResponse, ClaimResponse, Report, ReportResponse, SampleResponse, SearchRequest, SearchResponse, Teaser } from "@shared/types";
 import type { Env } from "../env";
-import { snapshotOf } from "../lib/compute";
 import { Db } from "../lib/db";
-import { receiptEmail, sendEmail, watchStartedEmail } from "../lib/email";
-import { enhanceSummary, search } from "../lib/pipeline";
-import { createCheckout, portalUrl, retrieveSession, sessionIsPaid, verifyWebhook, type WaitUntil } from "../lib/stripe";
+import { receiptEmail, sendEmail } from "../lib/email";
+import { enhanceReport, sampleReport, search } from "../lib/pipeline";
+import { createCheckout, retrieveSession, sessionIsPaid, verifyWebhook, type WaitUntil } from "../lib/stripe";
 import { looksLikeToken, randomToken, sha256Hex } from "../lib/tokens";
 
 type Ctx = { Bindings: Env };
@@ -42,6 +41,20 @@ api.post("/search", async (c) => {
   }
 });
 
+// ---- the landing page's sample: a full report on one fixed address, open to everyone ----
+api.get("/sample", async (c) => {
+  try {
+    const report = await sampleReport(c.env, (work) => c.executionCtx.waitUntil(work.catch((e) => console.error("sample", String(e)))));
+    if (!report) return c.json({ error: "no_sample" }, 404);
+    // The same for every visitor, and it changes about once a month.
+    c.header("cache-control", "public, max-age=3600");
+    return c.json<SampleResponse>({ report });
+  } catch (err) {
+    console.error("sample failed", String(err));
+    return c.json({ error: "upstream" }, 502);
+  }
+});
+
 // ---- 2. report: teaser without a token, full report with one ----
 api.get("/report/:id", async (c) => {
   const id = c.req.param("id");
@@ -52,12 +65,10 @@ api.get("/report/:id", async (c) => {
 
   const token = bearer(c.req.header("authorization"));
   if (!looksLikeToken(token)) return c.json<ReportResponse>({ kind: "teaser", teaser });
-  const access = await db.resolveToken(id, await sha256Hex(token));
-  if (!access) return c.json<ReportResponse>({ kind: "teaser", teaser });
+  if (!(await db.resolveToken(id, await sha256Hex(token)))) return c.json<ReportResponse>({ kind: "teaser", teaser });
 
   const report = JSON.parse(row.report_json) as Report;
-  const watch = access.kind === "watch" ? access.watch : await db.activeWatchForBin(row.bin, row.unit);
-  return c.json<ReportResponse>({ kind: "full", report, watch: { active: !!watch && watch.status === "active" } });
+  return c.json<ReportResponse>({ kind: "full", report });
 });
 
 // ---- 3. checkout: create a Stripe Checkout Session ----
@@ -68,13 +79,13 @@ api.post("/checkout", async (c) => {
   } catch {
     return c.json({ error: "invalid" }, 400);
   }
-  if (body.plan !== "report" && body.plan !== "watch") return c.json({ error: "invalid_plan" }, 400);
+  if (body.plan !== "report") return c.json({ error: "invalid_plan" }, 400);
   const db = new Db(c.env.DB);
   const row = await db.getReport(String(body.reportId ?? ""));
   if (!row) return c.json({ error: "not_found" }, 404);
   const origin = requestOrigin(c.req.raw, c.env.CANONICAL_HOST);
-  const session = await createCheckout(c.env, { reportId: row.id, plan: body.plan, origin, addressLabel: row.address_label });
-  if (body.plan === "report") await db.insertPendingPurchase(row.id, session.id);
+  const session = await createCheckout(c.env, { reportId: row.id, origin, addressLabel: row.address_label });
+  await db.insertPendingPurchase(row.id, session.id);
   if (!session.url) return c.json({ error: "stripe" }, 502);
   return c.json<CheckoutResponse>({ url: session.url });
 });
@@ -96,7 +107,7 @@ api.get("/report/:id/claim", async (c) => {
   // Fulfil idempotently here too, so the user never waits on webhook delivery.
   const result = await fulfil(c.env, session, c.executionCtx);
   if (!result) return c.json<ClaimResponse>({ ok: false, reason: "not_paid" }, 402);
-  return c.json<ClaimResponse>({ ok: true, token: result.token, plan: result.plan });
+  return c.json<ClaimResponse>({ ok: true, token: result.token });
 });
 
 // ---- 5. Stripe webhook: the source of truth for fulfilment ----
@@ -125,32 +136,10 @@ api.post("/stripe/webhook", async (c) => {
       await db.markPurchaseFailed(event.data.object.id);
       break;
     }
-    case "customer.subscription.deleted": {
-      await db.setWatchStatus(event.data.object.id, "canceled");
-      break;
-    }
-    case "customer.subscription.updated": {
-      const sub = event.data.object;
-      const status = sub.status === "active" || sub.status === "trialing" ? "active" : sub.status === "past_due" || sub.status === "unpaid" ? "past_due" : "canceled";
-      await db.setWatchStatus(sub.id, status);
-      break;
-    }
     default:
       break;
   }
   return c.json({ received: true });
-});
-
-// ---- 6. manage: open the Stripe customer portal for a watch (token-authenticated) ----
-api.get("/report/:id/manage", async (c) => {
-  const id = c.req.param("id");
-  const token = c.req.query("t") ?? bearer(c.req.header("authorization"));
-  if (!looksLikeToken(token)) return c.json({ error: "unauthorized" }, 401);
-  const db = new Db(c.env.DB);
-  const access = await db.resolveToken(id, await sha256Hex(token));
-  if (!access || access.kind !== "watch") return c.json({ error: "unauthorized" }, 401);
-  const url = await portalUrl(c.env, access.watch.stripe_customer_id, `https://${c.env.CANONICAL_HOST}/r/${id}#t=${token}`);
-  return c.redirect(url, 303);
 });
 
 // ---------- helpers ----------
@@ -184,57 +173,31 @@ export function requestOrigin(req: Request, canonicalHost: string): string {
 }
 
 /**
- * Fulfil a paid Checkout Session: record the purchase or watch, mint an access token,
+ * Fulfil a paid Checkout Session: record the purchase, mint an access token,
  * and on the first fulfilment send the email and start the AI summary. Safe to call
  * more than once per session (webhook and claim both call it); each call mints its
  * own token, all of which stay valid.
  */
-export async function fulfil(env: Env, session: Stripe.Checkout.Session, ctx: WaitUntil): Promise<{ token: string; plan: "report" | "watch" } | null> {
+export async function fulfil(env: Env, session: Stripe.Checkout.Session, ctx: WaitUntil): Promise<{ token: string } | null> {
+  // A report is a one-time payment; a session in any other mode is not one of ours to fulfil.
+  if (session.mode !== "payment") return null;
   const db = new Db(env.DB);
   const reportId = session.client_reference_id ?? session.metadata?.report_id;
   if (!reportId) return null;
   const row = await db.getReport(reportId);
   if (!row) return null;
-  const plan: "report" | "watch" = session.mode === "subscription" ? "watch" : "report";
   const email = session.customer_details?.email ?? session.customer_email ?? null;
   const customerId = typeof session.customer === "string" ? session.customer : (session.customer?.id ?? null);
   const token = randomToken();
   const link = `https://${env.CANONICAL_HOST}/r/${reportId}#t=${token}`;
   const quiet = (p: Promise<unknown>, what: string) => ctx.waitUntil(p.catch((e) => console.error(what, String(e))));
 
-  if (plan === "report") {
-    const { first, purchaseId } = await db.markPurchasePaid(session.id, reportId, email, customerId);
-    await db.insertToken(await sha256Hex(token), reportId, { purchaseId });
-    console.log(`fulfil report session=${session.id} report=${reportId} first=${first} email=${email ? "yes" : "no"}`);
-    if (first) {
-      quiet(enhanceSummary(env, reportId), "summary");
-      if (email) quiet(sendEmail(env, { to: email, ...receiptEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link }) }, { idempotencyKey: `receipt/${session.id}` }), "receipt email");
-    }
-    return { token, plan };
+  const { first, purchaseId } = await db.markPurchasePaid(session.id, reportId, email, customerId);
+  await db.insertToken(await sha256Hex(token), reportId, purchaseId);
+  console.log(`fulfil report session=${session.id} report=${reportId} first=${first} email=${email ? "yes" : "no"}`);
+  if (first) {
+    quiet(enhanceReport(env, reportId), "enhance");
+    if (email) quiet(sendEmail(env, { to: email, ...receiptEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link }) }, { idempotencyKey: `receipt/${session.id}` }), "receipt email");
   }
-
-  const subId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
-  if (!subId || !customerId || !email) return null;
-  const report = JSON.parse(row.report_json) as Report;
-  // Pre-tax recurring amount as shown at checkout; Managed Payments adds sales tax on top at billing time.
-  const monthly = session.amount_subtotal != null && session.currency ? new Intl.NumberFormat("en-US", { style: "currency", currency: session.currency.toUpperCase() }).format(session.amount_subtotal / 100) : null;
-  const { watch, created } = await db.upsertWatch({
-    reportId,
-    bin: row.bin,
-    bbl: row.bbl,
-    unit: row.unit,
-    addressLabel: row.address_label,
-    email,
-    customerId,
-    subscriptionId: subId,
-    snapshot: snapshotOf(report),
-    priceLabel: monthly,
-  });
-  await db.insertToken(await sha256Hex(token), reportId, { watchId: watch.id });
-  if (created) {
-    quiet(enhanceSummary(env, reportId), "summary");
-    const manageUrl = `https://${env.CANONICAL_HOST}/api/report/${reportId}/manage?t=${token}`;
-    quiet(sendEmail(env, { to: email, ...watchStartedEmail({ appName: env.APP_NAME, addressLabel: row.address_label, link, manageUrl, monthly }) }, { idempotencyKey: `watch-started/${subId}` }), "watch email");
-  }
-  return { token, plan };
+  return { token };
 }

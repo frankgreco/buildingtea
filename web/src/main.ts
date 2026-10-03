@@ -4,6 +4,7 @@
 // localStorage, and is sent as a bearer header on API calls.
 
 import { claim, getReport, getToken, search, setToken } from "./api";
+import { SUPPORT_EMAIL } from "./legal";
 import { renderCandidates, renderError, renderLegal, renderReport, renderSearch, renderTeaser, renderUnlocking } from "./render";
 
 const app = document.getElementById("app")!;
@@ -43,7 +44,13 @@ async function route() {
     if (token) setToken(id, token);
     history.replaceState(null, "", path);
     if (!token) {
-      renderError(app, "We couldn't confirm the payment yet. If you were charged, the link is in your email. Otherwise try again.", () => navigate(path, true));
+      renderError(app, {
+        title: "We ran into an issue",
+        message: "We couldn't confirm the payment. If you were charged, the link to your report is in your email.",
+        primary: { label: "Try again", onClick: () => navigate(`${path}?session_id=${encodeURIComponent(sessionId)}`, true) },
+        secondary: { label: "Back", onClick: () => navigate(path, true) },
+        onNew: () => navigate("/"),
+      });
       return;
     }
   }
@@ -51,10 +58,15 @@ async function route() {
   // 3. Load whichever version the token entitles us to.
   const res = await getReport(id, getToken(id)).catch(() => null);
   if (!res) {
-    renderError(app, "That report doesn't exist or has expired.", () => navigate("/"));
+    renderError(app, {
+      title: "We couldn't find that",
+      primary: { label: "New search", onClick: () => navigate("/") },
+      secondary: { label: "Contact support", href: `mailto:${SUPPORT_EMAIL}` },
+      onNew: () => navigate("/"),
+    });
     return;
   }
-  if (res.kind === "full") renderReport(app, res.report, { watchActive: res.watch.active, token: getToken(id), onNew: () => navigate("/") });
+  if (res.kind === "full") renderReport(app, res.report, { onNew: () => navigate("/") });
   else renderTeaser(app, res.teaser, { onNew: () => navigate("/") });
 }
 
@@ -86,7 +98,7 @@ async function onSearch(address: string) {
     return;
   }
   if (res.candidates && res.candidates.length) {
-    renderCandidates(app, res.message, res.candidates, (label) => onSearch(label));
+    renderCandidates(app, res.candidates, (label) => onSearch(label));
     return;
   }
   renderSearch(app, { onSubmit: onSearch, value: address, error: res.message });

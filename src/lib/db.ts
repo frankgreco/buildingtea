@@ -1,11 +1,6 @@
 // D1 access. Every query in one place so the schema has a single consumer.
 
-import type { Report, Teaser, WatchSnapshot } from "@shared/types";
-
-/** Days between watch digests (and from watch start to the first one). */
-export const DIGEST_INTERVAL_DAYS = 30;
-/** A watch whose digest failed waits this long before the next try, so it never blocks the queue. */
-export const DIGEST_RETRY_HOURS = 6;
+import type { Report, Teaser } from "@shared/types";
 
 export interface ReportRow {
   id: string;
@@ -28,35 +23,12 @@ export interface PurchaseRow {
   paid_at: string | null;
 }
 
-export interface WatchRow {
-  id: number;
-  report_id: string;
-  bin: string;
-  bbl: string;
-  unit: string | null;
-  address_label: string;
-  email: string;
-  stripe_customer_id: string;
-  stripe_subscription_id: string;
-  status: "active" | "past_due" | "canceled";
-  last_snapshot_json: string | null;
-  last_checked_at: string | null;
-  /** Unused since the monthly digest replaced nightly alerts; kept in the schema. */
-  last_alert_at: string | null;
-  last_digest_at: string | null;
-  /** Formatted recurring price as shown at checkout, e.g. "$3.00"; restated in each digest. */
-  price_label: string | null;
-  /** When the last failed digest attempt happened; drives the retry backoff. */
-  last_attempt_at: string | null;
-  created_at: string;
-}
-
 export interface TokenRow {
   token_hash: string;
   report_id: string;
-  kind: "purchase" | "watch";
+  /** "purchase" on every token minted here; a row of any other kind unlocks nothing. */
+  kind: string;
   purchase_id: number | null;
-  watch_id: number | null;
 }
 
 export class Db {
@@ -131,106 +103,17 @@ export class Db {
 
   // ---- access tokens ----
 
-  async insertToken(tokenHash: string, reportId: string, ref: { purchaseId: number } | { watchId: number }): Promise<void> {
-    const kind = "purchaseId" in ref ? "purchase" : "watch";
-    await this.d1
-      .prepare("INSERT INTO access_tokens (token_hash, report_id, kind, purchase_id, watch_id) VALUES (?1, ?2, ?3, ?4, ?5)")
-      .bind(tokenHash, reportId, kind, "purchaseId" in ref ? ref.purchaseId : null, "watchId" in ref ? ref.watchId : null)
-      .run();
+  /** Mint a token for a paid purchase. `kind` is NOT NULL in the schema; 'purchase' is the only kind written. */
+  async insertToken(tokenHash: string, reportId: string, purchaseId: number): Promise<void> {
+    await this.d1.prepare("INSERT INTO access_tokens (token_hash, report_id, kind, purchase_id) VALUES (?1, ?2, 'purchase', ?3)").bind(tokenHash, reportId, purchaseId).run();
   }
 
-  /** Resolve a token for a report. Returns the watch when the token is a watch token (any non-canceled status). */
-  async resolveToken(reportId: string, tokenHash: string): Promise<{ kind: "purchase" } | { kind: "watch"; watch: WatchRow } | null> {
+  /** Whether a token unlocks a report: it has to be one of the report's tokens, minted for a purchase that is paid. */
+  async resolveToken(reportId: string, tokenHash: string): Promise<boolean> {
     const t = await this.d1.prepare("SELECT * FROM access_tokens WHERE report_id = ?1 AND token_hash = ?2").bind(reportId, tokenHash).first<TokenRow>();
-    if (!t) return null;
-    if (t.kind === "purchase") {
-      const p = await this.d1.prepare("SELECT status FROM purchases WHERE id = ?1").bind(t.purchase_id).first<{ status: string }>();
-      return p?.status === "paid" ? { kind: "purchase" } : null;
-    }
-    const w = await this.d1.prepare("SELECT * FROM watches WHERE id = ?1 AND status != 'canceled'").bind(t.watch_id).first<WatchRow>();
-    return w ? { kind: "watch", watch: w } : null;
-  }
-
-  // ---- watches ----
-
-  /** Insert a watch, or reactivate an existing one for the same subscription. Returns the row and whether it was created. */
-  async upsertWatch(w: {
-    reportId: string;
-    bin: string;
-    bbl: string;
-    unit: string | null;
-    addressLabel: string;
-    email: string;
-    customerId: string;
-    subscriptionId: string;
-    snapshot: WatchSnapshot;
-    priceLabel: string | null;
-  }): Promise<{ watch: WatchRow; created: boolean }> {
-    const existing = await this.watchBySubscription(w.subscriptionId);
-    if (existing) {
-      if (existing.status !== "active") await this.setWatchStatus(w.subscriptionId, "active");
-      return { watch: { ...existing, status: "active" }, created: false };
-    }
-    await this.d1
-      .prepare(
-        `INSERT OR IGNORE INTO watches (report_id, bin, bbl, unit, address_label, email, stripe_customer_id, stripe_subscription_id, status, last_snapshot_json, last_checked_at, price_label)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?10, ?11)`,
-      )
-      .bind(w.reportId, w.bin, w.bbl, w.unit, w.addressLabel, w.email, w.customerId, w.subscriptionId, JSON.stringify(w.snapshot), new Date().toISOString(), w.priceLabel)
-      .run();
-    const watch = await this.watchBySubscription(w.subscriptionId);
-    if (!watch) throw new Error("watch row missing after insert");
-    return { watch, created: true };
-  }
-
-  async setWatchStatus(subscriptionId: string, status: WatchRow["status"]): Promise<void> {
-    await this.d1.prepare("UPDATE watches SET status = ?2 WHERE stripe_subscription_id = ?1").bind(subscriptionId, status).run();
-  }
-
-  async watchBySubscription(subscriptionId: string): Promise<WatchRow | null> {
-    return (await this.d1.prepare("SELECT * FROM watches WHERE stripe_subscription_id = ?1").bind(subscriptionId).first<WatchRow>()) ?? null;
-  }
-
-  async activeWatchForBin(bin: string, unit: string | null): Promise<WatchRow | null> {
-    return (await this.d1.prepare("SELECT * FROM watches WHERE bin = ?1 AND (unit IS ?2) AND status = 'active' LIMIT 1").bind(bin, unit).first<WatchRow>()) ?? null;
-  }
-
-  /**
-   * Watches whose monthly digest is due: the first one 30 days after the watch started,
-   * then 30 days after the previous digest. Only 'active' watches; past_due watches get
-   * no digest until Stripe collects payment and the webhook flips them back to active.
-   * A watch that failed within the last DIGEST_RETRY_HOURS is skipped, so one broken
-   * watch can't sit at the head of the queue and starve the rest.
-   */
-  async listWatchesDue(limit = 50): Promise<WatchRow[]> {
-    // Half a day of slack: without it a watch stamped seconds after a run is not due until the run after the 30-day mark.
-    const cutoff = new Date(Date.now() - (DIGEST_INTERVAL_DAYS * 24 - 12) * 3600_000).toISOString();
-    const retryCutoff = new Date(Date.now() - DIGEST_RETRY_HOURS * 3600_000).toISOString();
-    const res = await this.d1
-      .prepare(
-        `SELECT * FROM watches
-         WHERE status = 'active' AND COALESCE(last_digest_at, created_at) <= ?1
-           AND (last_attempt_at IS NULL OR last_attempt_at <= ?3)
-         ORDER BY COALESCE(last_digest_at, created_at) ASC
-         LIMIT ?2`,
-      )
-      .bind(cutoff, limit, retryCutoff)
-      .all<WatchRow>();
-    return res.results;
-  }
-
-  /** Record a failed digest attempt; the watch is retried after DIGEST_RETRY_HOURS. */
-  async markWatchAttempted(id: number): Promise<void> {
-    await this.d1.prepare("UPDATE watches SET last_attempt_at = ?2 WHERE id = ?1").bind(id, new Date().toISOString()).run();
-  }
-
-  /** Record a sent digest: the snapshot it was diffed to becomes the baseline for next month. */
-  async markWatchDigested(id: number, snapshot: WatchSnapshot): Promise<void> {
-    const now = new Date().toISOString();
-    await this.d1
-      .prepare("UPDATE watches SET last_snapshot_json = ?2, last_checked_at = ?3, last_digest_at = ?3 WHERE id = ?1")
-      .bind(id, JSON.stringify(snapshot), now)
-      .run();
+    if (!t || t.kind !== "purchase") return false;
+    const p = await this.d1.prepare("SELECT status FROM purchases WHERE id = ?1").bind(t.purchase_id).first<{ status: string }>();
+    return p?.status === "paid";
   }
 
   // ---- stripe idempotency ----

@@ -1,4 +1,4 @@
-import type { CheckoutResponse, ClaimResponse, ReportResponse, SearchResponse } from "@shared/types";
+import type { CheckoutRequest, CheckoutResponse, ClaimResponse, Report, ReportResponse, SampleResponse, SearchResponse } from "@shared/types";
 
 const TOKEN_PREFIX = "bt:token:";
 
@@ -37,8 +37,20 @@ export async function getReport(id: string, token: string | null): Promise<Repor
   return json<ReportResponse>(res);
 }
 
-export async function checkout(reportId: string, plan: "report" | "watch"): Promise<CheckoutResponse> {
-  const res = await fetch("/api/checkout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reportId, plan }) });
+/** The landing page's sample report, or null when there isn't one (or it didn't load). */
+export async function sample(): Promise<Report | null> {
+  try {
+    const res = await fetch("/api/sample");
+    if (!res.ok) return null;
+    return (await json<SampleResponse>(res)).report ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function checkout(reportId: string): Promise<CheckoutResponse> {
+  const body: CheckoutRequest = { reportId, plan: "report" };
+  const res = await fetch("/api/checkout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error("Could not start checkout");
   return json<CheckoutResponse>(res);
 }

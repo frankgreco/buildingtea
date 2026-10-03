@@ -111,6 +111,8 @@ Conventions:
   - `rentimpairing` = `Y` on ~7% of rows; worth surfacing.
   - Dates are `calendar_date` (ISO), so `$where=inspectiondate > '2025-10-01'` works.
   - Lat/long, `nta`, `communityboard` are present; not needed.
+  - **Violation history (all statuses), verified 2026-10-03.** `violationstatus` is `Open` or `Close`. There is no closing-date column: `currentstatusdate` is when `currentstatus` last changed, which for a closed row is when it was closed or dismissed (`VIOLATION CLOSED`, `VIOLATION DISMISSED`). Other dates: `approveddate` (inspection approved), `novissueddate` (notice sent), `originalcorrectbydate`/`newcorrectbydate`, `originalcertifybydate`/`newcertifybydate`, `certifieddate` (owner certified the repair). `ordernumber` is HPD's order number (`501`, `530`, `722`), `novid` the notice id, `novtype` `Original` or a reissue. The report fetches every status in one query, open first, then newest inspection (query u in §5); the open list the cards use is cut from it.
+  - 1130 Anderson: 291 rows, 77 `Open` / 214 `Close` (`VIOLATION DISMISSED` 153, `VIOLATION CLOSED` 61). Heaviest BINs by row count (grouped query over the whole set, 30 s): placeholder BINs `3000000`, `2000000`, `1000000` and a null BIN, then `3343260` (765 Lincoln Ave, Brooklyn, 5,722), `2025588` (1742 E 172 St, Bronx, 4,874), `2004223` (530 E 169 St, Bronx, 4,849, with 1,155 open, 160 BIS, 107 DOB NOW and 132 ECB rows: the size test building).
 
 ### 2.2 HPD — Housing Maintenance Code Complaints and Problems
 
@@ -132,6 +134,10 @@ Conventions:
   - `major_category` values match 311 HPD complaint types (`HEAT/HOT WATER`, `UNSANITARY CONDITION`, `PLUMBING`, `ELEVATOR`, …).
   - `unique_key` equals the 311 `unique_key` for the same complaint (verified `70572907` in both). **311 HPD rows and this dataset are the same complaints; do not add them together.**
   - `complaint_anonymous_flag`, `problem_duplicate_flag` exist; filter `problem_duplicate_flag='N'` if counting problems.
+  - `apartment` is free text cut to six characters: `BLDG`, `BUILDI`, `WHOLEB`, `BASEME`, `2NDFLO`, `APT3A` all occur (verified 2026-10-03). Only show it as a unit when it looks like one. `unit_type` is clean (`APARTMENT`, `BUILDING-WIDE`, `PUBLIC AREA`, `PUBLIC PARTS`) and says where the problem is; `space_type` names the room or area (`KITCHEN`, `LOBBY`, `ENTIRE BUILDING`, …). A complaint can mix scopes, e.g. apartment `D5` with one problem in the kitchen and one at the building entrance.
+  - There are only ~60 `major_category`/`minor_category` pairs in a year; `HEAT/HOT WATER`'s minor category is the scope (`ENTIRE BUILDING`/`APARTMENT ONLY`) and `problem_code` says what (`NO HEAT`, `NO HOT WATER`, `NO HEAT AND NO HOT WATER`, `HEAT ON IN SUMMER`).
+  - `major_category` over the five years to 2026-10-01 (problems): `HEAT/HOT WATER` 1,388,971, `UNSANITARY CONDITION` 670,945, `PLUMBING` 388,826, `PAINT/PLASTER` 357,377, `DOOR/WINDOW` 277,832, `WATER LEAK` 226,439, `GENERAL` 184,694, `ELECTRIC` 165,524, `FLOORING/STAIRS` 156,687, `APPLIANCE` 123,984, `SAFETY` 103,185, `OUTSIDE BUILDING` 9,658, `ELEVATOR` 9,642, `LINE OF TRAVEL` 8,222. `UNSANITARY CONDITION`'s minor categories in the last year: `PESTS` 84,566, `MOLD` 44,928, `GARBAGE/RECYCLING STORAGE` 22,400, `SEWAGE` 4,544 (verified 2026-10-03).
+  - Complaint topics on the report (`topics`, set in `computeComplaints` from these categories only, never from free text): `HEAT/HOT WATER` is heat; `PLUMBING` and `WATER LEAK` are plumbing; `UNSANITARY CONDITION` with minor `PESTS` is pest. A complaint with several problems carries every topic they have.
 
 ### 2.3 HPD — Multiple Dwelling Registrations (building → registration)
 
@@ -161,7 +167,8 @@ Conventions:
 - Example: `https://data.cityofnewyork.us/resource/feu5-w2e2.json?registrationid=209634`
   → `CorporateOwner | 1130 SHEVA REALTY HDFC, INC`, `Agent | LANGSAM PROPERTY SERVICES CORP (GREG GADSON)`, `HeadOfficer | MARK ENGEL`, `SiteManager | JOE MARTE`.
 - Gotchas:
-  - `type` values observed: `CorporateOwner`, `Agent`, `HeadOfficer`, `SiteManager` (other values exist, e.g. individual owners; treat as an enum you discover from the snapshot).
+  - `type` values observed: `CorporateOwner`, `Agent`, `HeadOfficer`, `SiteManager` (other values exist, e.g. individual owners; treat as an enum you discover from the snapshot). Full list (2026-10-03): `Agent`, `CorporateOwner`, `HeadOfficer`, `IndividualOwner`, `JointOwner`, `Lessee`, `Officer`, `Shareholder`, `SiteManager`.
+  - `contactdescription` is not a role: it is the registration's ownership structure (`GEN.PART`, `CORP`, `INC`, `INDIV`, `JOINT`, `CO-OP`, `CONDO`, `LLC`, `TRUST`, ...), repeated on every contact of the registration. The report labels contacts by `type`.
   - Self-reported by the owner; names can be LLC shells. Show "registered owner" and "managing agent", not "owner".
   - Pair with PLUTO `ownername` / DOF `owner` for a second opinion (see 2.11, 2.15).
 
@@ -198,6 +205,8 @@ Conventions:
   - `issue_date` and `disposition_date` are `YYYYMMDD` **text**; lexicographic compare works (`issue_date > '20250101'`).
   - `violation_type` is a padded string (`E-ELEVATOR … ELEVATORREQUIRED`); match on the prefix before the first `-` (`E` elevator, `LL6291` boilers, `BENCH` benchmarking, `C` construction, `P` plumbing, `AEUHAZ1` ECB hazard affirmation, …).
   - DOB says this set holds **older** civil penalties and that newer ones are in `855j-jady` (2.7) with **some duplication** between the two. De-duplicate on `violation_number` / `number` when both are present.
+  - The duplicate's BIS `number` is the DOB NOW `violation_number` with a `V` (or `V*` once resolved) in front: BIS `V062624AEUHAZ100065` is DOB NOW `062624AEUHAZ100065`. 1130 Anderson has four such pairs (two `AEUHAZ1`, two `BENCH`); the violation history lists each once, as the DOB NOW row, and notes the BIS number.
+  - **Violation history, verified 2026-10-03.** Active can't be sorted on (it is "the category has no `*`"), so the history is its own query, every row newest first (query x in §5), next to the existing active query (d). A closed row's closing date is `disposition_date` (`YYYYMMDD`); `disposition_comments` says how (`000810 PAID INVOICE 90490015`). 1130 Anderson: 29 rows, 5 active.
 
 ### 2.7 DOB — Safety Violations (DOB NOW, newer civil penalties)
 
@@ -214,6 +223,8 @@ Conventions:
   - `violation_status` values: `Active`, `Dismissed`, `Disputed Successfully`, `Waived - Pending Dismissal`, `Pending Dismissal`, `Cured`, `Paid  - Pending Dismissal` (two spaces).
   - `violation_type` codes: `LBLVIO`/`HBLVIO` boiler, `LL6291` boiler, `FTC-VT-CAT1-CO` / `FTC-VT-PER-CO` / `FTF-VT-*` elevator filing failures, `FTF-EN-BENCH` benchmarking, `FTC-AEU-HAZ` ECB hazard affirmation, `ACC1` elevator affirmation. Elevator = `device_type='Elevators'`.
   - Most rows are paperwork failures (failure to file), not physical hazards. Label them that way.
+  - Citywide `violation_status` counts (2026-10-03): `Active` 683,044, `Dismissed` 422,842, `Disputed Successfully` 2,593, `Waived - Pending Dismissal` 492, `Pending Dismissal` 213, `Cured` 81, `Paid  - Pending Dismissal` 8, null 3. There is no closing-date column.
+  - **Violation history.** One query for every status, active first, then newest (query v in §5); the active list the cards use is cut from it (status `Active`, same order, first 50). Ordering by `case(violation_status='Active',1,true,0) DESC` rather than by the status text keeps a null or new status from sorting ahead of `Active`. 1130 Anderson: 6 rows, 3 active.
 
 ### 2.8 DOB — ECB Violations (OATH summonses issued by DOB)
 
@@ -232,6 +243,9 @@ Conventions:
   - Dates are `YYYYMMDD` text. `hearing_time` is `830`-style text.
   - `balance_due` > 0 on an ACTIVE row is an unpaid penalty; useful to show.
   - The full OATH case feed is `jz4z-kudi` (22,090,200 rows, daily); not needed for v1 since this DOB extract already carries hearing status.
+  - Citywide `hearing_status` (2026-10-03): `IN VIOLATION` 682,066, `DISMISSED` 299,240, `WRITTEN OFF` 246,118, `CURED/IN-VIO` 214,953, `DEFAULT` 164,234, `STIPULATION/IN-VIO` 92,165, `POP/IN-VIO` 57,982, `ADMIT/IN-VIO` 37,923, `PENDING` 23,211, null 20,405. `certification_status`: `CERTIFICATE ACCEPTED` 1,004,932, `N/A - DISMISSED` 277,877, `CURE ACCEPTED` 214,943, `NO COMPLIANCE RECORDED` 166,817, null 111,121, `COMPLIANCE-INSP/DOC` 58,227, `CERTIFICATE DISAPPROVED` 2,699, `CERTIFICATE PENDING` 990, `REINSPECTION SHOWS VIOLATION GOOD` 657, `REINSPECTION SHOWS STILL IN VIOLATION` 34. There is no resolve date.
+  - A `PENDING` row already carries `penality_imposed` and `balance_due` (39205015P: 625 and 625, hearing 2026-12-04), but nothing is decided until the hearing, so the report never calls it a fine: it is labelled by hearing status ("Hearing pending") and the amount is shown as "Penalty listed, hearing pending". Only a decided hearing (`IN VIOLATION`, `DEFAULT`, `*/IN-VIO`) shows "Fine imposed".
+  - **Violation history.** One query for every status, active first, then newest (query w in §5); the active list the cards use is cut from it (status `ACTIVE`, same order, first 50). It also selects `amount_paid`, `certification_status`, `served_date`, `hearing_time`, `infraction_code1`, `section_law_description1`, `aggravated_level`, `respondent_name` and `dob_violation_number`. 1130 Anderson: 20 rows, 4 active.
 
 ### 2.9 DOB — Complaints Received
 
@@ -247,7 +261,9 @@ Conventions:
 - Gotchas:
   - `status` is `ACTIVE` / `CLOSED`.
   - All dates (`date_entered`, `disposition_date`, `inspection_date`) are `MM/DD/YYYY` **text**. You cannot range-filter them in SoQL; filter client-side or in Postgres after the daily pull. `dobrundate` is `YYYYMMDDHHMMSS` text.
-  - `complaint_category` is a 2-character code. Decoder: the dataset attachment `DOBComplaints_complaint_category_list.pdf` (https://data.cityofnewyork.us/api/views/eabe-havv/files/dc709ed2-7af1-429c-92c9-71ec3a4c23fa?download=true&filename=DOBComplaints_complaint_category_list.pdf, rev. 12/18). Codes that matter for a renter: `45` Illegal Conversion, `05` Permit – None, `04` After Hours Work, `31` Certificate of Occupancy – None/Illegal/Contrary, `30` Building Shaking/Structural Stability, `37` Egress Locked/Blocked, `62`/`63` Elevator – Danger Condition/Shaft Open (priority A/B), `80` Elevator Not Inspected/Illegal, `81` Elevator Accident, `56` Boiler – Fumes/Smoke/CO, `58` Boiler – Defective, `59` Electrical Wiring Defective, `65` Gas Hook-Up Illegal/Defective, `73` Failure to Maintain, `94` Plumbing Defective/Leaking, `4A` Illegal Hotel Rooms, `2B` Failure to Comply with Vacate Order. Newer codes such as `6S`, `6Y` are **not** in the 2018 PDF; store the raw code and show it unlabelled until DOB publishes an updated list.
+  - `complaint_category` is a 2-character code. Decoder: the dataset attachment `DOBComplaints_complaint_category_list.pdf` (https://data.cityofnewyork.us/api/views/eabe-havv/files/dc709ed2-7af1-429c-92c9-71ec3a4c23fa?download=true&filename=DOBComplaints_complaint_category_list.pdf, rev. 12/18). Codes that matter for a renter: `45` Illegal Conversion, `05` Permit – None, `04` After Hours Work, `31` Certificate of Occupancy – None/Illegal/Contrary, `30` Building Shaking/Structural Stability, `37` Egress Locked/Blocked, `62`/`63` Elevator – Danger Condition/Shaft Open (priority A/B), `80` Elevator Not Inspected/Illegal, `81` Elevator Accident, `56` Boiler – Fumes/Smoke/CO, `58` Boiler – Defective, `59` Electrical Wiring Defective, `65` Gas Hook-Up Illegal/Defective, `73` Failure to Maintain, `94` Plumbing Defective/Leaking, `4A` Illegal Hotel Rooms, `2B` Failure to Comply with Vacate Order. Newer codes such as `6S`, `6Y` are **not** in the 2018 PDF.
+  - The **current** list is DOB's "Complaint Categories", Rev. 9/21, 180 codes: https://www.nyc.gov/assets/buildings/pdf/complaint_category.pdf (the dataset's data-dictionary attachment `DD_DOB_Complaints_Received_2019-08-21.xlsx` names it as the current list). It adds `6S`/`6M` (elevator, single/multiple devices), `7J` (work without a permit, occupied multiple dwelling), `8A`, `1X`, `4S`, and more, and rewords `63` to "Elevator: Defective/Inoperative". With the three retired codes only in the 2018 list (`4C`, `4D`, `4F`) it labels 99.6% of all rows and 96.5% of 2025–26 rows (verified 2026-10-03). Still unlisted: `7R`, `2S`–`2Y`, `7P`, `7Q`, `7S`, `8P`, `1N`, `4Q`; show those as the raw code. Transcribed in `src/lib/translate.ts` (`DOB_COMPLAINT_CATEGORY`).
+  - `unit` is the DOB unit that dispositioned the complaint (`QNS.`, `BKLYN`, `ERT`, `ELEVR`, `BOILR`, …), **not** an apartment. Disposition codes are listed at https://www.nyc.gov/assets/buildings/pdf/bis_complaint_disposition_codes.pdf (not decoded yet).
   - 311 DOB rows (`agency='DOB'`) are the same complaints as this feed, keyed by BBL in 311 and BIN here.
 
 ### 2.10 311 — Service Requests from 2020 to Present
@@ -258,7 +274,8 @@ Conventions:
 - Rows: 22,659,530. Update: **Daily** (last 2026-10-02). Churn: 572,658 in 2 days (upsert; ~560k rows/day change because `status`/`closed_date` update).
 - Join key: `bbl` (text) **only**. No BIN. Also `incident_address` (`1130 ANDERSON AVENUE`), `incident_zip`, `address_type`.
 - Columns to keep: `unique_key`, `created_date`, `closed_date`, `agency`, `complaint_type`, `descriptor`, `descriptor_2`, `location_type`, `status`, `resolution_description`, `resolution_action_updated_date`, `incident_address`, `incident_zip`, `bbl`.
-- Live per address: **yes, for one BBL** (0.37 s with a 12-month filter), but see the strategy section; the dossier needs it daily for watches.
+- Live per address: **yes, for one BBL** (0.37 s with a 12-month filter), but see the strategy section.
+- Complaint topics (verified 2026-10-03): every `complaint_type` starting `Noise` is noise; the Health Dept's (`agency='DOHMH'`) `Rodent` type is pest (25,410 requests citywide in the year to 2026-10-01; no other complaint type that year matches rodent, pest or rat). DOB complaint codes with a topic are in `DOB_COMPLAINT_TOPIC` (`src/lib/translate.ts`): the four `Boiler: ...` codes (56, 57, 58, 82) are heat; 1W, 66, 6B, 76 and 94 are plumbing.
 - Example:
   `https://data.cityofnewyork.us/resource/erm2-nwe9.json?bbl=2025050046&complaint_type=HEAT/HOT WATER&$where=created_date>'2025-10-01'&$select=count(*)`
   → `14`.
@@ -336,13 +353,14 @@ Conventions:
 - Join: `bin` (number) → `buildingid`, `registrationid`.
 - Keep: `buildingid`, `registrationid`, `legalstories`, `legalclassa` (legal class A, i.e. permanent, units), `legalclassb` (transient/SRO units), `dobbuildingclass`, `managementprogram` (`PVT` private; others are HPD programs such as AEP), `lifecycle`, `recordstatus`.
 - Example: `https://data.cityofnewyork.us/resource/kj4p-ruqc.json?bin=2003068` → `buildingid 45427`, 6 stories, 42 class A units, `NEW LAW TENEMENT`, `PVT`, `Active`.
+- `managementprogram` values (citywide, 2026-10-03): `PVT` 375,520; `NYCHA` 1,978; `CENTRAL MGT` 1,413; `M-L (STATE)` 464; `M-L (NRF CITY)` 231; `LOFT LAW` 204; `M-L (RF CITY)` 141; `DRES` 75; `ALT MGT` 31; `7A` 28; `HPD O SITE` 18; `UNDEFINED` 13; `DRES RES PRO`, `LOW INCOME RENT`, `NYPD HPD_J` 1 each. HPD publishes no code list (the dataset's attachment only says the field "determines who is responsible for the management of this building"). The plain words in `src/lib/translate.ts` (`housingProgram`) cover the codes whose meaning is clear from the code and from PLUTO's owner for sample buildings (`CENTRAL MGT` and `ALT MGT` buildings are owned by HPD); `DRES`, `DRES RES PRO`, `HPD O SITE` and `NYPD HPD_J` show title-cased, and `UNDEFINED` shows nothing. `recordstatus` is `Active`, `Inactive` or `Pending`.
 - Why: you need `buildingid` for the HPD Online deep link, and this table has it even when there are no violations.
 
 ### 2.16 Other official sets worth knowing (not in v1)
 
 | Dataset | Id | Rows | Cadence | Join | Use |
 |---|---|---|---|---|---|
-| DOI Evictions (marshal-executed) | `6z8x-wfk4` | 134,824 | Daily | `bin`, `bbl`, `eviction_address` | Count of executed residential evictions; sensitive, show as a count only |
+| DOI Evictions (marshal-executed) | `6z8x-wfk4` | 134,824 | Daily | `bin`, `bbl`, `eviction_address` | Now in the report: executed residential evictions in the last three years with apartment, court index and docket numbers, marshal, and possession/ejectment type (§5 t) |
 | DOB Certificate of Occupancy (BIS) | `bs8b-p36w` | 143,204 | Daily | `bin` | CO status / no-CO; no rows for the test BIN, so coverage is partial |
 | DOB NOW Certificate of Occupancy | `pkdm-hqz6` | 82,494 | Daily | `bin` | Newer COs |
 | DOB NOW Safety Boiler | `52dp-yji6` | 889,047 | Daily | `bin` | Boiler inspection filings |
@@ -356,12 +374,12 @@ Conventions:
 
 ## 3. Live vs. snapshot
 
-Measured latency per filtered SODA call without an app token: 0.3–0.5 s. Eight parallel calls finish in under a second, so a cold search with no cache is fine for interactive use. The reasons to snapshot are the watch feature (you must diff daily anyway), BBL-only joins that need an index you control, and three datasets whose date columns are text.
+Measured latency per filtered SODA call without an app token: 0.3–0.5 s. Eight parallel calls finish in under a second, so a cold search with no cache is fine for interactive use. The reasons to snapshot are BBL-only joins that need an index you control, and three datasets whose date columns are text.
 
 | Dataset | Mode | Why |
 |---|---|---|
 | GeoSearch | Live | No alternative; cache resolved address → BIN/BBL forever (PAD version changes quarterly; re-resolve on `version` change) |
-| HPD violations `wvxf-dwi5` | **Both**: live on search, daily incremental into Postgres | 11.3M rows but indexed by BIN; daily diff needed for watches; `:updated_at` works (upsert, ~82k/day) |
+| HPD violations `wvxf-dwi5` | **Both**: live on search, daily incremental into Postgres | 11.3M rows but indexed by BIN; `:updated_at` works (upsert, ~82k/day) |
 | HPD complaints `ygpa-z7cr` | Both, same pattern | 16.3M rows; upsert ~34k/day |
 | DOB violations `3h2n-5cm9` | Both | 2.5M; upsert, tiny churn |
 | DOB safety violations `855j-jady` | Both | 1.1M; daily |
@@ -375,7 +393,7 @@ Measured latency per filtered SODA call without an app token: 0.3–0.5 s. Eight
 | Elevator compliance `e5aq-a4j2` | Daily full replace (or incremental) | 121k |
 | PLUTO `64uk-42ks` | Quarterly full replace | 858k; re-pull when `version` changes |
 
-Rule of thumb for v1: **serve the first search live** (so there is nothing to build before launch), write the merged result to a `dossier_snapshot` row, and let the daily jobs fill the local tables that the watch diff and PDF use.
+Rule of thumb for v1: **serve the first search live** (so there is nothing to build before launch), write the merged result to a `dossier_snapshot` row, and let the daily jobs fill the local tables that the PDF uses.
 
 ---
 
@@ -429,8 +447,41 @@ Input: `"1130 Anderson Ave, Bronx"` (free text).
    - n. `GET https://data.cityofnewyork.us/resource/tb8q-a3ar.json?bin=2003068`
    - o. `GET https://data.cityofnewyork.us/resource/kj4p-ruqc.json?bin=2003068&$select=buildingid,registrationid,legalstories,legalclassa,legalclassb,dobbuildingclass,managementprogram`
    (Replace the 12-month date literal with `now - 365 days` at request time.)
+
+   Complaint history for the full report (verified 2026-10-03 for 1130 Anderson Ave). Plain query params and `$where` are ANDed. p and s use a five-year window, the same calendar day five years before the request. A result of exactly the `$limit` means older rows were cut off, and the page says "Showing the newest N".
+   - p. HPD complaint problems, grouped into complaints by `complaint_id` in code:
+     `GET https://data.cityofnewyork.us/resource/ygpa-z7cr.json?bin=2003068&problem_duplicate_flag=N&$where=received_date > '2021-10-03'&$select=complaint_id,problem_id,received_date,type,major_category,minor_category,problem_code,complaint_status,complaint_status_date,problem_status,status_description,apartment,unit_type,space_type,unique_key&$order=received_date DESC&$limit=1000`
+     → 303 problem rows in 143 complaints. `type` `EMERGENCY`/`IMMEDIATE EMERGENCY`/`HAZARDOUS` marks the complaint as an emergency; `status_description` is HPD's outcome wording.
+   - q. Lifetime HPD complaint count:
+     `GET https://data.cityofnewyork.us/resource/ygpa-z7cr.json?bin=2003068&problem_duplicate_flag=N&$select=count(distinct complaint_id) as n` (same duplicate filter as the list, so the teaser count matches it)
+     → `392` (571 without the duplicate filter).
+   - r. DOB complaints, no date window (dates are `MM/DD/YYYY` text, parsed and sorted in code):
+     `GET https://data.cityofnewyork.us/resource/eabe-havv.json?bin=2003068&$select=complaint_number,status,date_entered,complaint_category,unit,disposition_date,disposition_code,inspection_date&$order=complaint_number DESC&$limit=500`
+     → 30 rows. Complaint numbers carry the borough digit first, so within one BIN the order is roughly chronological; the list is re-sorted by `date_entered`.
+   - s. 311 requests other than HPD and DOB:
+     `GET https://data.cityofnewyork.us/resource/erm2-nwe9.json?bbl=2025050046&$where=created_date > '2021-10-03' AND agency not in ('HPD','DOB')&$select=unique_key,created_date,closed_date,agency,complaint_type,descriptor,descriptor_2,location_type,status,resolution_description&$order=created_date DESC&$limit=500`
+     → 281 rows (NYPD 265, DEP 11, DSNY 4, DOT 1). HPD and DOB rows are excluded because they are the same complaints as p and r (§2.2: same `unique_key` for HPD; §2.9). `status` is `Closed` or one of `Open`, `Assigned`, `In Progress`, `Pending`, `Started`, `Unspecified`. `descriptor_2` is often `N/A` or a short code repeated from `descriptor` (`FHE`, `WA4`).
+   - t. Residential evictions carried out in the last three years, one row each (replaced a `count(*)` query with the same filters on 2026-10-03; the legal card's count is the row count and its "Evictions carried out, last 3 years" table lists each row):
+     `GET https://data.cityofnewyork.us/resource/6z8x-wfk4.json?bin=2003068&residential_commercial_ind=Residential&$where=executed_date > '2023-10-04'&$select=executed_date,eviction_apt_num,court_index_number,docket_number,marshal_first_name,marshal_last_name,ejectment,eviction_possession&$order=executed_date DESC&$limit=100`
+     → 5 rows (verified 2026-10-03), newest: `executed_date 2025-11-13`, `eviction_apt_num A7`, `court_index_number B311005/22`, `docket_number 119749`, `marshal_first_name Ileana`, `marshal_last_name Rivera`, `ejectment Not an Ejectment`, `eviction_possession Possession`. The others: 2025-10-16 (D5), 2025-01-21 (A3), 2024-03-06 (E2), 2024-02-06 (D6).
+     Selected columns and how the table shows them: `executed_date` (Date), `eviction_apt_num` (Apartment), `eviction_possession` + `ejectment` (Type, e.g. "Possession, not an ejectment"), `court_index_number` (Court index no.), `docket_number` (Docket), `marshal_first_name` + `marshal_last_name` (Marshal). Citywide values: `eviction_possession` is `Possession`, `Eviction` or `Unspecified`; `ejectment` is `Not an Ejectment` or `Ejectment`.
+     Not selected because the report already has them: `eviction_address` (this building's address, sometimes with the unit in parentheses), `borough`, `eviction_zip`, `bin`, `bbl`, `latitude`, `longitude`, `community_board`, `council_district`, `census_tract`, `nta`, and `residential_commercial_ind` (always `Residential` here, it is a filter).
+
+   Violation history (added 2026-10-03; verified live for 1130 Anderson Ave and 530 E 169 St). Three of the open-only row queries became all-status queries sorted open first, and the open lists every card reads are cut from them in code with the old filter, order and cap (`deriveHpdOpenItems`, `deriveDobNowActive`, `deriveEcbActive` in `src/lib/datasets.ts`), so the cards are unchanged. BIS gets one added query. **28 requests per report** (27 in parallel plus the contacts hop), up from 27. (Now 29: a count of the last year's housing violations by status was added the same day, because the capped row list holds open rows first and so can't say how many recent violations were closed on a building past the cap.) A result of exactly the `$limit` means some rows were cut off, and the page says so in one line. Live check on four buildings (2026-10-03): the derived lists have the same rows in the same date order as the old queries; only the order among rows sharing one date differs, and the old query itself returns those ties in a different order from one call to the next.
+   - u. HPD violations, every status (replaces the open-only row query; `hpdOpenItems` = `Open` rows, same order, first 300):
+     `GET https://data.cityofnewyork.us/resource/wvxf-dwi5.json?bin=2003068&$select=violationid,class,inspectiondate,approveddate,novissueddate,originalcorrectbydate,originalcertifybydate,newcorrectbydate,newcertifybydate,certifieddate,apartment,story,ordernumber,novid,novtype,novdescription,currentstatus,currentstatusdate,violationstatus,rentimpairing&$order=case(violationstatus='Open',1,true,0) DESC,inspectiondate DESC&$limit=500`
+     → 291 rows (77 open first). The limit is 500, not 1,000: a report is one D1 row (2 MB cap), and at 1,000 the stored report for 530 E 169 St was 1.68 MB; at 500 it is 1.31 MB (1,000 rows of that building are all open: it has 1,155).
+   - v. DOB NOW violations, every status (replaces the `violation_status=Active` query; `dobNowActive` = `Active` rows, same order, first 50):
+     `GET https://data.cityofnewyork.us/resource/855j-jady.json?bin=2003068&$select=violation_number,violation_type,violation_remarks,violation_status,violation_issue_date,device_type,device_number,cycle_end_date&$order=case(violation_status='Active',1,true,0) DESC,violation_issue_date DESC&$limit=300`
+     → 6 rows, 3 active.
+   - w. City summonses, every status (replaces the `ecb_violation_status=ACTIVE` query; `ecbActive` = `ACTIVE` rows, same order, first 50):
+     `GET https://data.cityofnewyork.us/resource/6bgk-3dad.json?bin=2003068&$select=ecb_violation_number,ecb_violation_status,dob_violation_number,issue_date,served_date,severity,violation_type,violation_description,infraction_code1,section_law_description1,aggravated_level,respondent_name,penality_imposed,amount_paid,balance_due,hearing_date,hearing_time,hearing_status,certification_status&$order=case(ecb_violation_status='ACTIVE',1,true,0) DESC,issue_date DESC&$limit=300`
+     → 20 rows, 4 active (39205015P `PENDING`, hearing 2026-12-04).
+   - x. BIS violations, every status (added; the active query d stays as it is):
+     `GET https://data.cityofnewyork.us/resource/3h2n-5cm9.json?bin=2003068&$select=number,violation_number,violation_type_code,violation_type,violation_category,issue_date,disposition_date,disposition_comments,description,device_number,ecb_number&$order=issue_date DESC&$limit=300`
+     → 29 rows; 4 repeat a DOB NOW violation and are listed once (§2.6).
 4. **Merge** into one JSON (shape in §6), stamp `fetched_at`, each section's `source_updated_at` from the dataset's `rowsUpdatedAt`, and the PAD `version`.
-5. **Persist** the merged JSON keyed by `(bin, bbl, fetched_at)` so the PDF and the watch diff read the same object the user saw.
+5. **Persist** the merged JSON keyed by `(bin, bbl, fetched_at)` so the PDF reads the same object the user saw.
 
 ---
 
@@ -534,4 +585,3 @@ Build the "explore" link generically: `https://data.cityofnewyork.us/d/{id}/expl
 5. **311 filtered mirror**: backfill 2 years for the agencies/types in §2.10, then nightly incremental; index on `bbl, created_date`.
 6. **Code tables**: load the DOB complaint category PDF into a lookup, the DOB violation-type prefixes, and the status enums listed per dataset; store raw codes alongside labels.
 7. **Links block + "as of" stamps**: generate §7 URLs and surface `rowsUpdatedAt` per section; confirm the HPD Online route in a browser once.
-8. **Watch diff**: nightly, re-run the summary from local tables for every watched `(bin, bbl)`, diff against the last stored JSON, and queue notifications on new open B/C, new ECB/DOB active, new vacate order, new litigation, bedbug filing change, or ownership/registration change.

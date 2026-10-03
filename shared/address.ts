@@ -29,6 +29,20 @@ export function splitUnit(input: string): SplitUnit {
   return { text, unit: null };
 }
 
+/**
+ * An apartment number reduced to its letters and digits, upper-cased, for matching and grouping:
+ * "Apt 3-b" -> "3B", "#D5" -> "D5". Null when nothing is left.
+ */
+export function normalizeUnit(unit: string | null | undefined): string | null {
+  if (!unit) return null;
+  const u = unit
+    .trim()
+    .toUpperCase()
+    .replace(/^(?:APARTMENT|APT|UNIT)\b\.?|^(?:APT|UNIT)(?=\d)/, "")
+    .replace(/[^A-Z0-9]/g, "");
+  return u || null;
+}
+
 /** Put a unit back into a geocoder label: "143 WEST 4 STREET, New York, NY, USA" + "3FW" -> "143 WEST 4 STREET #3FW, New York, NY, USA". */
 export function withUnit(label: string, unit: string | null): string {
   if (!unit) return label;

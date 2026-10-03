@@ -12,18 +12,18 @@ export const LEGAL: Record<"privacy" | "terms", { title: string; html: string }>
     html: `<h2>What we collect</h2>
 <ul>
 <li>The address you search and the report we build from public city records.</li>
-<li>If you buy a report or a watch, Stripe takes your email and payment details as the seller of record and tells us your email so we can send your link. We never see your card.</li>
+<li>If you buy a report, Stripe takes your email and payment details as the seller of record and tells us your email so we can send your link. We never see your card.</li>
 <li>Standard request logs (IP address, browser) that Cloudflare keeps briefly to run and protect the site.</li>
 <li>Cookie-free, aggregate traffic counts. No tracking cookies, no accounts, no ad pixels.</li>
 </ul>
 <h2>How we use it</h2>
-<p>To build and deliver your report, to send the emails you asked for (your report link, your watch confirmation, and monthly watch check-ins), and to keep the site running. We don't send marketing email, and we don't sell your information or share it for advertising.</p>
+<p>To build and deliver your report, to email you the link to it, and to keep the site running. We don't send marketing email, and we don't sell your information or share it for advertising.</p>
 <h2>Who else handles it</h2>
 <p>Stripe (payments and receipts), Resend (sends our email), Cloudflare (hosts the site), and OpenRouter, the AI service that writes the plain-English summary; it receives the building's public records and never your email. Address suggestions come from NYC Planning's GeoSearch service directly from your browser, so it sees what you type in the search box.</p>
 <h2>Public records</h2>
 <p>Reports repeat what New York City publishes on NYC Open Data about buildings and their registered owners and agents. That information is public and comes from the City, not from us.</p>
 <h2>Keeping and deleting</h2>
-<p>We keep reports and watch records so your link keeps working. Email ${mail} to have your email address and anything tied to it deleted.</p>
+<p>We keep reports and purchase records so your link keeps working. Email ${mail} to have your email address and anything tied to it deleted.</p>
 <h2>Do Not Track</h2>
 <p>We don't track you across other sites, so we treat every visitor the same whether or not your browser sends a Do Not Track signal.</p>
 <h2>Changes and contact</h2>
@@ -39,8 +39,6 @@ export const LEGAL: Record<"privacy" | "terms", { title: string; html: string }>
 <p>BuildingTea isn't a consumer reporting agency, and reports aren't consumer reports under the Fair Credit Reporting Act. Don't use them to make decisions about anyone's housing, employment, credit, or insurance.</p>
 <h2>Buying a report</h2>
 <p>The one-time price is shown at checkout. Stripe is the seller of record: it processes the payment, sends the receipt, and handles refunds and disputes. The link we email is the key to your report. Anyone with the link can open it, so share it on purpose.</p>
-<h2>Watching a building</h2>
-<p>A watch is a monthly subscription at the price shown at checkout, plus any sales tax. Once a month it re-checks the building's city records and emails you a short note on what changed with a link to the refreshed report. It renews every month and bills the card you used until you cancel. Cancel any time from the "Manage or cancel" link in any watch email or on your report page. Cancelling stops the next charge, and your watch runs through the end of the period you've paid for. If you can't find the link, email ${mail} from the address you signed up with and we'll cancel it for you. We'll email you before any price change takes effect.</p>
 <h2>Fair use</h2>
 <p>Search like a person, for your own use. Don't scrape, resell, or republish reports, and don't use them to harass anyone.</p>
 <h2>No warranty, limited liability</h2>

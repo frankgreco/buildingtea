@@ -12,9 +12,9 @@ export interface Env {
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICE_REPORT: string;
-  STRIPE_PRICE_WATCH: string;
-  /** BuildingTea's own Customer Portal configuration (bpc_...); without it Stripe uses the account default. */
-  STRIPE_PORTAL_CONFIG?: string;
+
+  /** The address of the landing page's sample report ("1018 Eastern Parkway, Brooklyn"). No sample when unset. */
+  SAMPLE_ADDRESS?: string;
 
   SOCRATA_APP_TOKEN?: string;
   RESEND_API_KEY?: string;

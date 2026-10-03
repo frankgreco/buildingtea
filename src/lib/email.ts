@@ -2,10 +2,10 @@
 // message is logged instead, so local development never needs an email account.
 //
 // The HTML follows the house email structure shared with Essence and Peach & Cherry
-// (emails/ in those repos): brand on top, one card with kicker, headline, lead, button,
-// a detail panel, a hairline "not for you" block, then a middot footer. The styling is
+// (emails/ in those repos), with only the parts the receipt uses: brand on top, one card
+// with kicker, headline and button, then a middot footer. The styling is
 // the site's own (web/src/styles.css): cream page, ink borders, hard offset shadows,
-// the yellow h1 highlight, the coral tag chip. Preview every email with `pnpm email:preview`.
+// the yellow h1 highlight, the coral tag chip. Preview the email with `pnpm email:preview`.
 
 import type { Env } from "../env";
 
@@ -93,12 +93,8 @@ interface Frame {
   tag: string;
   /** The headline, highlighted in yellow like the site's h1. */
   title: string;
-  /** Paragraph under the headline. Only the monthly check has one: its note on what changed. */
-  lead?: string;
   /** The site's .btn.primary. No sub-label. */
   cta: { label: string; url: string };
-  /** Optional block under a hairline: a title, one sentence, a link. */
-  foot?: { title: string; text: string; link: { label: string; url: string } };
   /** Any absolute URL on our origin; the lockup and footer links are derived from it. */
   link: string;
 }
@@ -108,18 +104,11 @@ function frame(f: Frame): string {
   const s = (extra: string) => `font-family:${FONT};${extra}`;
   const kicker = `<div style="${s(`font-size:13px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:${C.secondary};padding-top:4px;`)}">${esc(f.kicker)}</div>`;
   const tag = `<span style="${s(`display:inline-block;background-color:${C.accent};color:#ffffff;border:2px solid ${C.ink};border-radius:999px;padding:3px 10px;font-weight:900;font-size:12px;line-height:16px;white-space:nowrap;transform:rotate(3deg);`)}">${esc(f.tag)}</span>`;
-  const lead = f.lead ? `<div style="${s(`font-size:16px;line-height:25px;color:${C.secondary};padding-top:12px;`)}">${esc(f.lead)}</div>` : "";
   const cta = `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate;"><tr>
     <td align="center" bgcolor="${C.accent}" style="background-color:${C.accent};border:2px solid ${C.ink};border-radius:14px;box-shadow:3px 3px 0 ${C.ink};">
       <a href="${esc(f.cta.url)}" style="${s("display:block;padding:13px 24px;font-size:16px;line-height:20px;font-weight:900;color:#ffffff;text-decoration:none;text-align:center;")}">${esc(f.cta.label)}</a>
     </td>
   </tr></table>`;
-  const foot = f.foot
-    ? `<tr><td class="px" style="padding:0 28px 26px;border-top:2px solid ${C.grid};">
-  <div style="${s(`font-size:17px;font-weight:900;letter-spacing:-0.01em;color:${C.text};padding-top:18px;`)}">${esc(f.foot.title)}</div>
-  <div style="${s(`font-size:14px;line-height:22px;color:${C.secondary};padding-top:4px;`)}">${esc(f.foot.text)} <a href="${esc(f.foot.link.url)}" style="${s(`font-weight:800;color:${C.text};text-decoration:underline;`)}">${esc(f.foot.link.label)}</a></div>
-</td></tr>`
-    : "";
   const footLink = (href: string, label: string) => `<a href="${esc(href)}" style="color:${C.muted};font-weight:700;text-decoration:none;">${esc(label)}</a>`;
 
   return `<!DOCTYPE html>
@@ -155,10 +144,8 @@ function frame(f: Frame): string {
             <tr><td class="px" style="padding:22px 28px 24px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td valign="top">${kicker}</td><td align="right" valign="top" style="padding-left:12px;">${tag}</td></tr></table>
               <div class="h1" style="${s(`font-size:32px;line-height:36px;font-weight:900;letter-spacing:-0.03em;color:${C.text};padding-top:8px;`)}"><span style="background-color:${C.hilite};background:linear-gradient(transparent 55%,${C.hilite} 55%);padding:0 2px;">${esc(f.title)}</span></div>
-              ${lead}
-              <div style="padding-top:${f.lead ? "20px" : "16px"};">${cta}</div>
+              <div style="padding-top:16px;">${cta}</div>
             </td></tr>
-            ${foot}
           </table>
         </td></tr>
         <tr><td align="center" style="padding:26px 16px 0;">
@@ -173,7 +160,7 @@ function frame(f: Frame): string {
 `;
 }
 
-// ---------- the emails ----------
+// ---------- the email ----------
 
 export function receiptEmail(args: { appName: string; addressLabel: string; link: string }): Omit<Mail, "to"> {
   const { appName, addressLabel, link } = args;
@@ -190,76 +177,4 @@ export function receiptEmail(args: { appName: string; addressLabel: string; link
       cta: { label: "Open your report", url: link },
     }),
   };
-}
-
-// The watch confirmation and the monthly check are one email; the monthly check adds
-// its note on what changed, and the kicker, subject, and inbox preview line differ.
-
-/**
- * The confirmation is the auto-renewal acknowledgment New York (GBL 527-a) and California
- * (B&P 17602) require: the recurring price, that it renews until cancelled, the cancellation
- * policy, and how to cancel. California also wants those terms restated at least yearly,
- * which the monthly check covers by carrying the same sentence.
- */
-const renewalTerms = (monthly: string | null) =>
-  `${monthly ? `${monthly} a month plus tax` : "Billed monthly at your checkout price"} until you cancel. Cancelling stops the next charge, and your watch runs through the month you've paid for.`;
-
-function watchEmail(a: { subject: string; kicker: string; preheader: string; addressLabel: string; link: string; manageUrl: string; monthly: string | null; lead?: string }): Omit<Mail, "to"> {
-  const address = titleCase(a.addressLabel);
-  const terms = renewalTerms(a.monthly);
-  return {
-    subject: a.subject,
-    text: `${a.kicker}: ${address}\n\n${a.lead ? `${a.lead}\n\n` : ""}Open your monthly report: ${a.link}\n\nNo longer for you? ${terms}\nManage or cancel: ${a.manageUrl}`,
-    html: frame({
-      link: a.link,
-      preheader: a.preheader,
-      kicker: a.kicker,
-      tag: "watching",
-      title: address,
-      ...(a.lead ? { lead: a.lead } : {}),
-      cta: { label: "Open your monthly report", url: a.link },
-      foot: { title: "No longer for you?", text: terms, link: { label: "Manage or cancel", url: a.manageUrl } },
-    }),
-  };
-}
-
-export function watchStartedEmail(args: { appName: string; addressLabel: string; link: string; manageUrl: string; monthly: string | null }): Omit<Mail, "to"> {
-  return watchEmail({
-    ...args,
-    subject: `${args.appName} is now watching ${args.addressLabel}`,
-    kicker: "Watch confirmed",
-    preheader: `You're watching ${titleCase(args.addressLabel)}. Your report refreshes once a month.`,
-  });
-}
-
-/**
- * The monthly check: the model's short note on what changed (template copy in quiet
- * months or when the model is unavailable) over the same email as the confirmation.
- * The change list itself stays out of the email; the details live in the report.
- */
-export function watchDigestEmail(args: {
-  appName: string;
-  addressLabel: string;
-  link: string;
-  manageUrl: string;
-  changes: string[];
-  /** The model's note on what changed; null in quiet months or when it failed. */
-  summary: string | null;
-  /** Formatted recurring price, e.g. "$3.00"; null when unknown. */
-  monthly: string | null;
-}): Omit<Mail, "to"> {
-  const { appName, addressLabel, changes, summary } = args;
-  const address = titleCase(addressLabel);
-  const n = changes.length;
-  const fallback = n
-    ? `Since last month, ${n === 1 ? "one thing" : `${n} things`} changed in the city's records for ${address}. The details are in your report.`
-    : `Nothing new showed up in the city's records for ${address} since last month.`;
-  const lead = summary?.trim() || fallback;
-  return watchEmail({
-    ...args,
-    subject: n ? `${appName}: ${n === 1 ? "1 change" : `${n} changes`} at ${addressLabel}` : `${appName}: nothing new at ${addressLabel}`,
-    kicker: "Monthly check",
-    preheader: lead.length > 140 ? `${lead.slice(0, 137)}…` : lead,
-    lead,
-  });
 }

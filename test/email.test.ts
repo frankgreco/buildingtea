@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import { EmailError, receiptEmail, sendEmail, watchDigestEmail, watchStartedEmail } from "../src/lib/email";
+import { EmailError, receiptEmail, sendEmail } from "../src/lib/email";
 
 const env = { APP_NAME: "BuildingTea", EMAIL_FROM: "BuildingTea <no-reply@buildingtea.com>" } as Env;
 
@@ -21,28 +21,6 @@ describe("email templates", () => {
     expect(m.html).toContain('href="mailto:frank@lifeisfake.com"');
     expect(m.html).toContain(">Contact</a>");
     expect(m.html).not.toContain(">frank@lifeisfake.com<");
-  });
-
-  it("watch confirmation and monthly check are one email: monthly-report button, renewal terms, cancel link", () => {
-    const s = watchStartedEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m", monthly: "$3.00" });
-    const d = watchDigestEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m", changes: ["Hazardous conditions open: 0 → 2"], summary: "One new hazardous violation this month.", monthly: "$3.00" });
-    for (const m of [s, d]) {
-      expect(m.html).toContain("Open your monthly report");
-      expect(m.html).not.toContain("We'll send you this email"); // the box is gone; the preview line may still say "once a month"
-      expect(m.text).toContain("$3.00 a month plus tax until you cancel");
-      expect(m.html).toContain("No longer for you?");
-      expect(m.html).toContain('href="https://m"');
-      expect(m.html).toContain('href="https://l"');
-      expect(m.html).not.toContain("Hazardous conditions open");
-    }
-    expect(s.subject).toBe("BuildingTea is now watching X");
-    expect(d.subject).toBe("BuildingTea: 1 change at X");
-    expect(d.html).toContain("One new hazardous violation this month.");
-    expect(s.html).not.toContain("One new hazardous violation");
-    const quiet = watchDigestEmail({ appName: "BuildingTea", addressLabel: "X", link: "https://l", manageUrl: "https://m", changes: [], summary: null, monthly: null });
-    expect(quiet.subject).toBe("BuildingTea: nothing new at X");
-    expect(quiet.text).toContain("Nothing new showed up");
-    expect(quiet.text).toContain("checkout price until you cancel");
   });
 });
 
@@ -86,12 +64,12 @@ describe("sendEmail", () => {
       .mockResolvedValueOnce(new Response("busy", { status: 503 }))
       .mockRejectedValueOnce(new TypeError("network down"))
       .mockResolvedValueOnce(new Response("{}", { status: 200 }));
-    const sent = sendEmail(keyed, hi, { idempotencyKey: "digest/7/2026-10-01" });
+    const sent = sendEmail(keyed, hi, { idempotencyKey: "receipt/cs_7" });
     await vi.runAllTimersAsync();
     await expect(sent).resolves.toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     const keys = fetchSpy.mock.calls.map((c) => (c[1]!.headers as Record<string, string>)["idempotency-key"]);
-    expect(new Set(keys)).toEqual(new Set(["digest/7/2026-10-01"]));
+    expect(new Set(keys)).toEqual(new Set(["receipt/cs_7"]));
   });
 
   it("gives up after the last retry and reports a transient failure as not permanent", async () => {
@@ -107,6 +85,6 @@ describe("sendEmail", () => {
 
   it("treats a reused key with a different payload as already sent", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response('{"name":"invalid_idempotent_request"}', { status: 409 }));
-    await expect(sendEmail(keyed, hi, { idempotencyKey: "digest/7/2026-10-01" })).resolves.toBeUndefined();
+    await expect(sendEmail(keyed, hi, { idempotencyKey: "receipt/cs_7" })).resolves.toBeUndefined();
   });
 });

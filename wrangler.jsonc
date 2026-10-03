@@ -1,7 +1,6 @@
 // BuildingTea Worker configuration. This file IS the infrastructure definition:
-// the Worker, its static assets, the D1 database, the KV cache, the rate limiter,
-// the digest cron and the custom domains are all declared here and applied by
-// `wrangler deploy`. See
+// the Worker, its static assets, the D1 database, the KV cache, the rate limiter
+// and the custom domains are all declared here and applied by `wrangler deploy`. See
 // README.md "Deploying" for the one-time setup steps.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -23,14 +22,13 @@
     "APP_NAME": "BuildingTea",
     "CANONICAL_HOST": "buildingtea.com",
     "EMAIL_FROM": "BuildingTea <no-reply@buildingtea.com>",
-    // BuildingTea's own Stripe Customer Portal configuration (live), printed by `pnpm stripe:setup`.
-    // Not secret. The account is shared with Essence, whose default portal would show otherwise;
-    // .dev.vars overrides this with the sandbox id for local work.
-    "STRIPE_PORTAL_CONFIG": "bpc_1UMCFKLMuLBKxJVZuuJpMKJO"
+    // The landing page's sample report: a full, unlocked report on this address, rebuilt monthly
+    // (src/lib/pipeline.ts sampleReport). Remove the line to show no sample.
+    "SAMPLE_ADDRESS": "1018 Eastern Parkway, Brooklyn"
   },
 
   // Secrets (set with `wrangler secret put NAME`, or in .dev.vars locally):
-  //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_REPORT, STRIPE_PRICE_WATCH,
+  //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_REPORT,
   //   SOCRATA_APP_TOKEN (optional but recommended), RESEND_API_KEY (optional),
   //   OPENAI_API_KEY (optional; OpenRouter key that enables the AI-written summary)
 
@@ -59,9 +57,10 @@
     }
   ],
 
-  // Every ten minutes: handles one watch whose monthly digest is due (see
-  // src/scheduled.ts; one per run keeps a free-plan invocation under 50 subrequests).
-  "triggers": { "crons": ["*/10 * * * *"] },
+  // No scheduled jobs. The empty list is on purpose: `wrangler deploy` only replaces a
+  // Worker's cron triggers when "crons" is present, so dropping this line would leave a
+  // previously deployed schedule firing at a Worker with no scheduled() handler.
+  "triggers": { "crons": [] },
 
   // Local dev: wrangler otherwise presents the first route's host (buildingtea.com)
   // on plain http, which the canonical-host middleware would 301 to production.

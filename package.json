@@ -17,10 +17,12 @@
     "migrate:local": "wrangler d1 migrations apply buildingtea --local",
     "migrate:remote": "wrangler d1 migrations apply buildingtea --remote",
     "email:preview": "tsx scripts/email-preview.ts",
+    "pages:preview": "tsx scripts/page-preview.ts",
     "stripe:setup": "tsx scripts/stripe-setup.ts",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
+    "echarts": "6.1.0",
     "hono": "^4.13.0",
     "stripe": "^23.0.0",
     "zod": "^4.6.0"

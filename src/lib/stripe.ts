@@ -17,55 +17,34 @@ export interface WaitUntil {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-/** Tags sessions in the Dashboard so report vs watch funnels can be compared. */
-const INTEGRATION_ID = { report: "buildingtea_report_qkzmwvtp", watch: "buildingtea_watch_hsrdnbyx" } as const;
+/** Tags report sessions in the Dashboard so the funnel can be followed. */
+const INTEGRATION_ID = "buildingtea_report_qkzmwvtp";
 
-export async function createCheckout(env: Env, args: { reportId: string; plan: "report" | "watch"; origin: string; addressLabel: string }): Promise<Stripe.Checkout.Session> {
+export async function createCheckout(env: Env, args: { reportId: string; origin: string; addressLabel: string }): Promise<Stripe.Checkout.Session> {
   const stripe = stripeClient(env);
-  const success = `${args.origin}/r/${args.reportId}?session_id={CHECKOUT_SESSION_ID}&plan=${args.plan}`;
+  const success = `${args.origin}/r/${args.reportId}?session_id={CHECKOUT_SESSION_ID}&plan=report`;
   const cancel = `${args.origin}/r/${args.reportId}`;
-  const common = {
+  const params = {
     client_reference_id: args.reportId,
     success_url: success,
     cancel_url: cancel,
-    metadata: { report_id: args.reportId, plan: args.plan, address: args.addressLabel.slice(0, 200) },
-    integration_identifier: INTEGRATION_ID[args.plan],
+    metadata: { report_id: args.reportId, plan: "report", address: args.addressLabel.slice(0, 200) },
+    integration_identifier: INTEGRATION_ID,
     // No payment_method_types: Stripe picks eligible methods (Apple Pay, Link, card...) dynamically.
-  } satisfies Partial<Stripe.Checkout.SessionCreateParams> & { integration_identifier: string };
-
-  if (args.plan === "report") {
-    return stripe.checkout.sessions.create({
-      ...common,
-      mode: "payment",
-      line_items: [{ price: env.STRIPE_PRICE_REPORT, quantity: 1 }],
-      customer_creation: "if_required",
-    } as Stripe.Checkout.SessionCreateParams);
-  }
-  return stripe.checkout.sessions.create({
-    ...common,
-    mode: "subscription",
-    line_items: [{ price: env.STRIPE_PRICE_WATCH, quantity: 1 }],
-    subscription_data: { metadata: { report_id: args.reportId } },
-  } as Stripe.Checkout.SessionCreateParams);
+    mode: "payment",
+    line_items: [{ price: env.STRIPE_PRICE_REPORT, quantity: 1 }],
+    customer_creation: "if_required",
+  } satisfies Stripe.Checkout.SessionCreateParams & { integration_identifier: string };
+  return stripe.checkout.sessions.create(params as Stripe.Checkout.SessionCreateParams);
 }
 
 export async function retrieveSession(env: Env, sessionId: string): Promise<Stripe.Checkout.Session> {
-  return stripeClient(env).checkout.sessions.retrieve(sessionId, { expand: ["subscription"] });
+  return stripeClient(env).checkout.sessions.retrieve(sessionId);
 }
 
 export async function verifyWebhook(env: Env, rawBody: string, signature: string): Promise<Stripe.Event> {
   const stripe = stripeClient(env);
   return stripe.webhooks.constructEventAsync(rawBody, signature, env.STRIPE_WEBHOOK_SECRET, undefined, Stripe.createSubtleCryptoProvider());
-}
-
-export async function portalUrl(env: Env, customerId: string, returnUrl: string): Promise<string> {
-  // The account is shared with Essence; pass our own portal configuration so the page says BuildingTea.
-  const session = await stripeClient(env).billingPortal.sessions.create({
-    customer: customerId,
-    return_url: returnUrl,
-    ...(env.STRIPE_PORTAL_CONFIG ? { configuration: env.STRIPE_PORTAL_CONFIG } : {}),
-  });
-  return session.url;
 }
 
 export function sessionIsPaid(s: Stripe.Checkout.Session): boolean {

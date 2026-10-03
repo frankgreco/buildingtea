@@ -5,7 +5,6 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
 import { api } from "./routes/api";
-import { runWatches } from "./scheduled";
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -31,7 +30,8 @@ app.use("*", async (c, next) => {
   c.header("x-content-type-options", "nosniff");
   c.header("referrer-policy", "strict-origin-when-cross-origin");
   c.header("x-frame-options", "DENY");
-  if (c.req.path.startsWith("/api/")) c.header("cache-control", "no-store");
+  // API responses are per visitor unless a route says otherwise (the public sample report does).
+  if (c.req.path.startsWith("/api/") && !c.res.headers.has("cache-control")) c.header("cache-control", "no-store");
 });
 
 app.route("/api", api);
@@ -41,7 +41,4 @@ app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default {
   fetch: app.fetch,
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runWatches(env, ctx));
-  },
 } satisfies ExportedHandler<Env>;
