@@ -50,6 +50,7 @@ const THEME: ChartTheme = {
     case: "#2a78d6",
     vacate: "#eb6834",
     eviction: "#4a3aa7",
+    program: "#1baf7a",
   },
 };
 
@@ -223,9 +224,23 @@ describe("violations chart", () => {
     expect([values(view.option, 0)[0], values(view.option, 1)[0]]).toEqual([0, 1]);
     // Records before the window, and undated ones, aren't charted: the list has them.
     expect(values(view.option, 0).reduce((a, b) => a + b, 0) + values(view.option, 1).reduce((a, b) => a + b, 0)).toBe(4);
-    expect(view.label).toBe("Stacked bar chart of violations and summonses per month, open and closed, Nov 2025 to Oct 2026. The list below has every one, older ones too.");
+    expect(view.label).toBe(
+      "Stacked bar chart of violations, summonses, failed rat inspections and city emergency repairs per month, open and closed, Nov 2025 to Oct 2026. The list below has every one, older ones too.",
+    );
     // An empty building still gets its twelve months.
     expect(violationsChart([], ALL_STATUSES, opts()).months).toEqual(YEAR_MONTHS);
+  });
+
+  it("counts failed rat inspections and city repairs with the violations, by their status", () => {
+    const rat = (date: string, status: ViolationRecord["status"]): ViolationRecord => ({ ...v(date, status), source: "rats", kind: "rats" });
+    const repair = (date: string): ViolationRecord => ({ ...v(date, "closed"), source: "repairs", kind: "repairs" });
+    const view = violationsChart([...items, rat("2026-09-03", "open"), rat("2026-09-04", "closed"), repair("2026-09-05"), repair("2026-08-05")], ALL_STATUSES, opts());
+    // September had two open and one closed violation: one more open, two more closed.
+    expect([values(view.option, 0)[SEP], values(view.option, 1)[SEP]]).toEqual([3, 3]);
+    expect([values(view.option, 0)[AUG], values(view.option, 1)[AUG]]).toEqual([0, 1]);
+    // The month's total is of records, since not all of them are violations.
+    expect(tooltip(view.option, SEP)).toContain("6 records");
+    expect(tooltip(view.option, AUG)).toContain("1 record<");
   });
 
   it("draws only the statuses the legend has switched on", () => {
@@ -313,22 +328,32 @@ describe("complaints chart", () => {
 
 describe("legal chart", () => {
   const l = (kind: LegalRecord["kind"], date: string | null, status: LegalRecord["status"] = "closed"): LegalRecord => ({ kind, what: "x", where: "Building", date, status, closedAt: null, facts: [] });
-  const items = [l("case", "2026-08-28", "open"), l("eviction", "2026-08-02"), l("eviction", "2025-11-13"), l("vacate", "2026-09-01", "open"), l("case", "2015-03-26"), l("eviction", null)];
+  const items = [
+    l("case", "2026-08-28", "open"),
+    l("eviction", "2026-08-02"),
+    l("eviction", "2025-11-13"),
+    l("vacate", "2026-09-01", "open"),
+    l("case", "2015-03-26"),
+    l("eviction", null),
+    l("program", "2026-08-03", "open"),
+    l("program", "2013-01-31"),
+  ];
   const ALL = LEGAL_SERIES.map((s) => s.key);
 
-  it("stacks court cases, vacate orders and evictions over the last twelve months", () => {
+  it("stacks court cases, vacate orders, evictions and city programs over the last twelve months", () => {
     const view = legalChart(items, ALL, opts());
     expect(view.months).toEqual(YEAR_MONTHS);
     expect(view.option.series.map((s) => [s.name, (s.itemStyle as { color: string }).color])).toEqual([
       ["Court cases", "#2a78d6"],
       ["Vacate orders", "#eb6834"],
       ["Evictions", "#4a3aa7"],
+      ["City programs", "#1baf7a"],
     ]);
-    expect(LEGAL_SERIES.map((_, k) => values(view.option, k)[AUG])).toEqual([1, 0, 1]);
-    expect(LEGAL_SERIES.map((_, k) => values(view.option, k)[SEP])).toEqual([0, 1, 0]);
+    expect(LEGAL_SERIES.map((_, k) => values(view.option, k)[AUG])).toEqual([1, 0, 1, 1]);
+    expect(LEGAL_SERIES.map((_, k) => values(view.option, k)[SEP])).toEqual([0, 1, 0, 0]);
     expect(values(view.option, 2)[0]).toBe(1);
-    expect(tooltip(view.option, AUG)).toContain("2 records");
-    expect(view.label).toBe("Stacked bar chart of housing court cases, vacate orders and evictions per month, Nov 2025 to Oct 2026. The list below has every one, older ones too.");
+    expect(tooltip(view.option, AUG)).toContain("3 records");
+    expect(view.label).toBe("Stacked bar chart of housing court cases, vacate orders, evictions and city programs per month, Nov 2025 to Oct 2026. The list below has every one, older ones too.");
   });
 
   it("draws only the kinds the legend has switched on", () => {
@@ -336,5 +361,9 @@ describe("legal chart", () => {
     expect(view.option.series.map((s) => s.name)).toEqual(["Evictions"]);
     expect(values(view.option, 0)[AUG]).toBe(1);
     expect(view.label).toContain("It counts only evictions.");
+    const programs = legalChart(items, ["program"], opts());
+    expect(programs.option.series.map((s) => s.name)).toEqual(["City programs"]);
+    expect(values(programs.option, 0)[AUG]).toBe(1);
+    expect(programs.label).toContain("It counts only city programs.");
   });
 });

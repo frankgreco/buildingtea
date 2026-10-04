@@ -249,6 +249,8 @@ function buildingFactsCard(c: Partial<Cover> | undefined): string {
     add("Floors", c.floors);
     if (c.elevators) add("Elevators", c.elevators);
     add("Apartments", c.unitsRes);
+    const cert = c.legalUnits;
+    if (cert) add("Legal apartments", `${cert.units.toLocaleString("en-US")} (${cert.temporary ? "temporary certificate" : "certificate"} of occupancy, ${fmtDay(cert.date)})`);
     const commercial = c.unitsTotal != null && c.unitsRes != null ? c.unitsTotal - c.unitsRes : 0;
     if (commercial > 0) add("Commercial units", commercial);
     add("Buildings on lot", c.buildingsOnLot);
@@ -259,6 +261,28 @@ function buildingFactsCard(c: Partial<Cover> | undefined): string {
     add("Landmark", c.landmark);
     if (c.condo) add("Condo", "Yes");
     add("City housing program", c.housingProgram);
+    const flood = c.floodZone;
+    if (flood) {
+      const maps = [flood.firm2007 ? "2007" : "", flood.prelim2015 ? "2015 preliminary" : ""].filter(Boolean);
+      add("Flood zone", maps.length ? `Yes (${maps.join(" and ")} flood map${maps.length > 1 ? "s" : ""})` : "No");
+    }
+    const facade = c.facade;
+    if (facade) add("Facade inspection", `${facade.status} (cycle ${facade.cycle}${facade.filed ? `, filed ${fmtDay(facade.filed)}` : ""})`);
+    const boiler = c.boiler;
+    if (boiler) {
+      const defects = !boiler.withDefects ? "no defects reported" : boiler.boilers > 1 ? `defects reported on ${boiler.withDefects} of ${boiler.boilers} boilers` : "defects reported";
+      add("Boiler inspection", `${fmtDay(boiler.inspected)} · ${defects}`);
+    }
+    const permits = c.permits12mo;
+    if (permits?.count) add("Work permits in 12 months", [permits.count.toLocaleString("en-US"), (Array.isArray(permits.types) ? permits.types : []).join(", ").toLowerCase()].filter(Boolean).join(" · "));
+    const asbestos = c.asbestos;
+    if (asbestos?.filings) {
+      const latest = asbestos.latestStart ? `latest started ${fmtDay(asbestos.latestStart)}${asbestos.latestStatus ? ` (${asbestos.latestStatus.toLowerCase()})` : ""}` : "";
+      add("Asbestos abatement filings", [asbestos.filings.toLocaleString("en-US"), latest].filter(Boolean).join(" · "));
+    }
+    // A hint, not a finding: the tax break is on the city's roll, and rent stabilization usually comes with it.
+    const taxBreak = c.taxBreak;
+    if (taxBreak) add("May be rent stabilized", `Gets the ${taxBreak.program} tax break (${taxBreak.taxYear - 1}/${String(taxBreak.taxYear).slice(2)} tax year)`);
   }
   return `<section class="card" id="building-facts"><h2>Building facts</h2>${
     facts.length ? `<div class="facts">${facts.map(([k, v]) => `<div class="fact"><small>${esc(k)}</small>${esc(v)}</div>`).join("")}</div>` : `<p class="chart-sub">Nothing on file.</p>`
@@ -295,9 +319,9 @@ function snapshotCard(r: Report): string {
 /**
  * The Landlord card: the owner's name as the headline, who manages the building, and how the city
  * registration stands; then everyone on the registration with their address, the owner in the tax
- * records when that differs, and every registration field. It reads the landlord question card's
- * tables, which hold exactly these, so a report stored before those existed gets "" and keeps the
- * question card.
+ * records when that differs, every registration field, and what the property records say about the
+ * lot (`r.property`). It reads the landlord question card's tables, which hold the registration, so
+ * a report stored before those existed gets "" and keeps the question card.
  */
 function landlordCard(r: Report): string {
   const card = r.cards?.find((c) => c.key === "owner");
@@ -339,12 +363,42 @@ function landlordCard(r: Report): string {
     ...(card.notes ?? []).filter((x) => x && !x.startsWith("Tax records list the owner as")).map((x) => row("What it means", [`<span>${esc(x)}</span>`])),
   ];
 
+  // The lot's property records: its last sale, newest mortgage and latest tax lien listing. A line
+  // shows only when the city has something; a report stored before these has none.
+  const usd = (x: number) => `$${Math.round(x).toLocaleString("en-US")}`;
+  const dated = (iso: string | null, rest: string) => [iso ? fmtDay(iso) : "", rest].filter(Boolean).join(" · ");
+  const property: string[] = [];
+  const sale = r.property?.sale;
+  if (sale) {
+    const share = sale.share ? ` for a ${sale.share}% share` : "";
+    property.push(
+      row(
+        "Last sold",
+        sale.price == null
+          ? [`<b>No sale price on record</b>`, sale.date ? `<span>Last transferred ${esc(fmtDay(sale.date))}</span>` : ""]
+          : [
+              `<b>${esc(dated(sale.date, `${usd(sale.price)}${share}`))}</b>`,
+              sale.transferred ? `<span>Transferred again ${esc(fmtDay(sale.transferred))}, with no sale price</span>` : "",
+              // One deed can convey several lots for one price, and nothing in the report says when it did.
+              `<span>The price on the deed, which can cover other lots too</span>`,
+            ],
+      ),
+    );
+  }
+  const mortgage = r.property?.mortgage;
+  if (mortgage) property.push(row("Latest mortgage", [`<b>${esc(dated(mortgage.date, mortgage.amount == null ? "amount not recorded" : usd(mortgage.amount)))}</b>`]));
+  const lien = r.property?.taxLien;
+  if (lien) {
+    const month = new Date(lien.month).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+    property.push(row("Tax lien sale list", [`<b>${esc([month, lien.stage].filter(Boolean).join(" · "))}</b>`, `<span>${lien.waterOnly ? "For water debt only" : "Not for water debt alone"}</span>`]));
+  }
+
+  const lists = [people, registration, property].filter((x) => x.length);
   return `<section class="card landlord" id="landlord"><h2>Landlord</h2>
     <p class="ll-owner"><span>${esc(owner ?? "Owner not on file")}</span></p>
     ${agent ? `<p class="ll-by">Managed by <b>${esc(agent)}</b></p>` : ""}
     <p class="ll-reg${flagged ? " flag" : ""}"><i aria-hidden="true"></i>${esc(standing)}</p>
-    ${people.length ? `<dl class="ll-list">${people.join("")}</dl>` : ""}
-    ${registration.length ? `<dl class="ll-list${people.length ? " ll-more" : ""}">${registration.join("")}</dl>` : ""}
+    ${lists.map((x, i) => `<dl class="ll-list${i ? " ll-more" : ""}">${x.join("")}</dl>`).join("")}
   </section>`;
 }
 

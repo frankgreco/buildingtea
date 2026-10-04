@@ -61,11 +61,12 @@ export const TOPIC_SERIES: { key: TopicKey; name: string }[] = [
   { key: "other", name: "Other" },
 ];
 
-/** The legal chart's three, in stacking order. */
+/** The legal chart's four, in stacking order. */
 export const LEGAL_SERIES: { key: LegalKind; name: string }[] = [
   { key: "case", name: "Court cases" },
   { key: "vacate", name: "Vacate orders" },
   { key: "eviction", name: "Evictions" },
+  { key: "program", name: "City programs" },
 ];
 
 // ---------- months ----------
@@ -323,9 +324,10 @@ function build(o: ViewOpts, months: string[], series: StackSeries[], unit: [stri
 }
 
 /**
- * Violations issued in each of the last twelve months, stacked by status: open at the baseline,
- * closed above. `shown` is what the legend has switched on. Older and undated records aren't
- * charted; the list has them.
+ * The Violations section's records dated in each of the last twelve months, stacked by status: open
+ * at the baseline, closed above. That is every row the section lists: violations and summonses,
+ * failed rat inspections, and the city's emergency repairs. `shown` is what the legend has switched
+ * on. Older and undated records aren't charted; the list has them.
  */
 export function violationsChart(items: ViolationRecord[], shown: readonly StatusKey[], o: ViewOpts): ChartView {
   const months = lastMonths(o.now, YEAR);
@@ -334,8 +336,10 @@ export function violationsChart(items: ViolationRecord[], shown: readonly Status
   const counts = bucket(items, months, (v) => monthOf(v.date), (v) => (v.status === "open" ? "open" : "closed"), keys);
   const filtered = on.length < STATUS_SERIES.length;
   return {
-    ...build(o, months, on.map((s) => ({ ...s, data: counts[s.key]! })), ["violation", "violations"]),
-    label: `Stacked bar chart of violations and summonses per month, open and closed, ${span(months)}.${filtered ? ` It counts only the ${on.map((s) => s.name.toLowerCase()).join(" and ")} ones.` : ""} ${TAIL}`,
+    ...build(o, months, on.map((s) => ({ ...s, data: counts[s.key]! })), ["record", "records"]),
+    label: `Stacked bar chart of violations, summonses, failed rat inspections and city emergency repairs per month, open and closed, ${span(months)}.${
+      filtered ? ` It counts only the ${on.map((s) => s.name.toLowerCase()).join(" and ")} ones.` : ""
+    } ${TAIL}`,
   };
 }
 
@@ -362,8 +366,9 @@ export function complaintsChart(items: Complaint[], shown: readonly TopicKey[], 
 }
 
 /**
- * Housing court cases opened, vacate orders that took effect and evictions carried out in each of
- * the last twelve months, stacked by kind, whichever of them the legend has switched on (`shown`).
+ * Housing court cases opened, vacate orders that took effect, evictions carried out and city
+ * programs begun in each of the last twelve months, stacked by kind, whichever of them the legend
+ * has switched on (`shown`).
  */
 export function legalChart(items: LegalRecord[], shown: readonly LegalKind[], o: ViewOpts): ChartView {
   const months = lastMonths(o.now, YEAR);
@@ -373,6 +378,6 @@ export function legalChart(items: LegalRecord[], shown: readonly LegalKind[], o:
   const filtered = on.length < LEGAL_SERIES.length;
   return {
     ...build(o, months, on.map((s) => ({ ...s, data: counts[s.key]! })), ["record", "records"]),
-    label: `Stacked bar chart of housing court cases, vacate orders and evictions per month, ${span(months)}.${filtered ? ` It counts only ${on.map((s) => s.name.toLowerCase()).join(", ")}.` : ""} ${TAIL}`,
+    label: `Stacked bar chart of housing court cases, vacate orders, evictions and city programs per month, ${span(months)}.${filtered ? ` It counts only ${on.map((s) => s.name.toLowerCase()).join(", ")}.` : ""} ${TAIL}`,
   };
 }

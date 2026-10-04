@@ -38,19 +38,6 @@ export async function soda(dataset: string, params: Record<string, string | numb
   return (await res.json()) as Row[];
 }
 
-/** Dataset metadata: when the publisher last updated rows. */
-export async function datasetUpdatedAt(dataset: string, opts: SodaOptions = {}): Promise<string | null> {
-  const f = opts.fetcher ?? fetch;
-  try {
-    const res = await f(`https://data.cityofnewyork.us/api/views/${dataset}.json`, { signal: AbortSignal.timeout(opts.timeoutMs ?? 6000) });
-    if (!res.ok) return null;
-    const meta = (await res.json()) as { rowsUpdatedAt?: number };
-    return meta.rowsUpdatedAt ? new Date(meta.rowsUpdatedAt * 1000).toISOString() : null;
-  } catch {
-    return null;
-  }
-}
-
 /** SoQL string literal (single quotes doubled). */
 export function lit(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;

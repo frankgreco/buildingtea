@@ -78,3 +78,16 @@ Counts are 311 requests at this lot (`erm2-nwe9` by BBL) in the last 12 months w
 | Otherwise | Looks good |
 
 Never Serious or Critical: 311 noise reports cover the whole lot and the address the caller gave, so some are about neighbors or the street. The answer names the most common noise type; the card's table lists each type with its count.
+
+## Records that change no status
+
+Rat inspections, city emergency repairs and city programs are listed in the Violations and Legal sections. None of them changes a card's status or a snapshot number: "Open violations", "Violations unfixed in 12 months", the open hazard count and the searched apartment's count are of housing violations, buildings violations and summonses only, and "Open legal matters" is of court cases and vacate orders only (`shared/snapshot.ts`). Each row still has an open or closed state of its own:
+
+| Record | Open | Closed |
+|---|---|---|
+| Failed rat inspection (`p937-wjvj`, result starts with `Failed`) | No later inspection of the lot has the result `Passed`. Baiting, monitoring, stoppage and clean-up visits don't count, and neither does a pass at the same moment | The lot passed a later inspection; the closing date is the first such pass |
+| City emergency repair (`mdbu-nrqn`, `sbnd-xujn`) | Never | Always. The headline says "made" when the status reason is `OMO Completed`, `Work Partially Completed`, `Repair Comp, Problem Resolved`, `Repair Completed,New HWO Needed`, `Fuel Delivered` or `HPD Clean/Dust Tested`, and "ordered" for any other reason or none |
+| Alternative Enforcement Program, Heat Sensor Program (`hcir-3275`, `h4mf-f24e`) | No discharge date, and the status doesn't say discharged | Discharged; the closing date is the discharge date |
+| Certification of No Harassment pilot list (`bzxi-2tsw`) | The building has a row | Never: a building taken off the list has no row |
+
+The Landlord section's "Last sold" is the newest deed for more than $100; a deed for less is a transfer, and is noted beside the sale when it is newer. The "May be rent stabilized" tile shows only for an approved 421-a or J-51 exemption with a value above zero on the current tax year's roll.

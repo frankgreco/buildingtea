@@ -1,35 +1,17 @@
 // The whole thing: address -> BIN/BBL -> parallel city queries -> Report + Teaser -> D1.
 // Used by the search route.
 
-import type { Address, Report, SourceStamp, Teaser } from "@shared/types";
+import type { Address, Report, Teaser } from "@shared/types";
 import type { Env } from "../env";
 import { computeReport, teaserOf } from "./compute";
-import { DATASETS, fetchBuildingData } from "./datasets";
+import { fetchBuildingData } from "./datasets";
 import { Db } from "./db";
 import { isPlaceholderBin, resolveAddress, type GeoHit } from "./geosearch";
 import { snapshotOf } from "@shared/snapshot";
 import { nameRecords, rewriteSummary } from "./llm";
 import { applyNames, pendingNames } from "./naming";
-import type { SummaryFacts } from "./summary";
-import { datasetUpdatedAt } from "./soda";
+import { alsoOnFile, type SummaryFacts } from "./summary";
 import { randomId, sha256Hex } from "./tokens";
-
-const SOURCE_KEYS = ["hpdViolations", "hpdComplaints", "dobSafetyViolations", "ecbViolations", "n311", "bedbugs", "hpdRegistrations", "pluto"] as const;
-
-/** Dataset "last updated" stamps, cached in KV for six hours. */
-export async function sourceStamps(env: Env): Promise<SourceStamp[]> {
-  const key = "sources:v1";
-  const cached = await env.CACHE.get<SourceStamp[]>(key, "json");
-  if (cached) return cached;
-  const stamps = await Promise.all(
-    SOURCE_KEYS.map(async (k) => {
-      const d = DATASETS[k];
-      return { id: d.id, name: d.name, updatedAt: await datasetUpdatedAt(d.id) } satisfies SourceStamp;
-    }),
-  );
-  await env.CACHE.put(key, JSON.stringify(stamps), { expirationTtl: 6 * 3600 });
-  return stamps;
-}
 
 export function addressFromHit(hit: GeoHit, unit: string | null): Address {
   return {
@@ -53,13 +35,14 @@ export interface Built {
   teaser: Teaser;
 }
 
-/** Fetch and compute for a resolved address. Does not touch the database. */
+/**
+ * Fetch and compute for a resolved address. Does not touch the database. The city requests are the
+ * only ones a build makes, and with the address lookup they come close to the 50 subrequests one
+ * invocation gets (datasets.ts), so nothing else that fetches should share an invocation with it.
+ */
 export async function buildReport(env: Env, address: Address, id = randomId(), now = new Date()): Promise<Built> {
-  const [raw, sources] = await Promise.all([
-    fetchBuildingData(address.bin, address.bbl, now, { appToken: env.SOCRATA_APP_TOKEN, timeoutMs: 9000 }),
-    sourceStamps(env),
-  ]);
-  const report = computeReport({ id, address, raw, sources, now });
+  const raw = await fetchBuildingData(address.bin, address.bbl, now, { appToken: env.SOCRATA_APP_TOKEN, timeoutMs: 9000 });
+  const report = computeReport({ id, address, raw, now });
   const teaser = teaserOf(report, raw);
   return { report, teaser };
 }
@@ -88,13 +71,14 @@ export async function search(env: Env, input: string): Promise<SearchOutcome> {
 
 /** Exactly what the AI summary is written from. */
 export function summaryFacts(r: Report): SummaryFacts {
-  return { address: r.address, cover: r.cover, counts: r.counts, ownership: r.ownership, bedbugs: r.bedbugs, cards: r.cards, snapshot: snapshotOf(r) };
+  return { address: r.address, cover: r.cover, counts: r.counts, ownership: r.ownership, bedbugs: r.bedbugs, cards: r.cards, snapshot: snapshotOf(r), also: alsoOnFile(r) };
 }
 
 /**
  * The model's work on a paid report, in one pass and one write: rewrite the template summary, and
  * name the last twelve months' rows (naming.ts). Each is skipped when it is already done and keeps
- * what the report has on any failure. Called via ctx.waitUntil after a purchase.
+ * what the report has on any failure. Called via ctx.waitUntil after a purchase, and for the
+ * landing page's sample (below); never in an invocation that also builds a report.
  */
 export async function enhanceReport(env: Env, reportId: string): Promise<void> {
   if (!env.OPENAI_API_KEY) return;
@@ -127,13 +111,22 @@ export async function sampleReportId(address: string): Promise<string> {
   return `sample${(await sha256Hex(address.trim().toLowerCase())).slice(0, 18)}`;
 }
 
+/** How long after one try at the sample's summary and row names the next request may try again. */
+export const SAMPLE_ENHANCE_RETRY_SECONDS = 6 * 3600;
+
 /**
  * The landing page's sample: a full report on env.SAMPLE_ADDRESS, stored like any other under a
  * fixed id. The first request builds it. After SAMPLE_MAX_AGE_DAYS the stored one is still served
  * while its replacement is built behind the response, so the sample never claims something about a
- * real building that the city's records stopped saying months ago. Either way the model's summary
- * and row names follow behind the response (`defer`). Null when no sample is configured or its
- * address doesn't resolve.
+ * real building that the city's records stopped saying months ago.
+ *
+ * The model's summary and row names never share an invocation with a build, which uses nearly all
+ * of the invocation's subrequests on its own. A request that builds does only that. A later request
+ * that finds the stored sample without the model's summary starts that work behind the response
+ * (`defer`), once per build every SAMPLE_ENHANCE_RETRY_SECONDS: a mark in KV keeps the requests that
+ * arrive while it runs, or after it failed, from each paying for it again.
+ *
+ * Null when no sample is configured or its address doesn't resolve.
  */
 export async function sampleReport(env: Env, defer: (work: Promise<unknown>) => void, now = new Date()): Promise<Report | null> {
   const input = env.SAMPLE_ADDRESS?.trim();
@@ -152,12 +145,16 @@ export async function sampleReport(env: Env, defer: (work: Promise<unknown>) => 
     else await db.insertReport(built.report, built.teaser);
     return built.report;
   };
-  if (!row) {
-    const report = await build();
-    if (report) defer(enhanceReport(env, id));
-    return report;
-  }
+  if (!row) return build();
   const report = JSON.parse(row.report_json) as Report;
-  if (Date.parse(report.generatedAt) < now.getTime() - SAMPLE_MAX_AGE_DAYS * 86_400_000) defer(build().then((fresh) => (fresh ? enhanceReport(env, id) : undefined)));
+  if (Date.parse(report.generatedAt) < now.getTime() - SAMPLE_MAX_AGE_DAYS * 86_400_000) {
+    defer(build());
+  } else if (report.summarySource !== "ai" && env.OPENAI_API_KEY) {
+    const mark = `sample-enhance:${id}:${report.generatedAt}`;
+    if (!(await env.CACHE.get(mark))) {
+      await env.CACHE.put(mark, now.toISOString(), { expirationTtl: SAMPLE_ENHANCE_RETRY_SECONDS });
+      defer(enhanceReport(env, id));
+    }
+  }
   return report;
 }

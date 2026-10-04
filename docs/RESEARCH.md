@@ -361,14 +361,136 @@ Conventions:
 | Dataset | Id | Rows | Cadence | Join | Use |
 |---|---|---|---|---|---|
 | DOI Evictions (marshal-executed) | `6z8x-wfk4` | 134,824 | Daily | `bin`, `bbl`, `eviction_address` | Now in the report: executed residential evictions in the last three years with apartment, court index and docket numbers, marshal, and possession/ejectment type (§5 t) |
-| DOB Certificate of Occupancy (BIS) | `bs8b-p36w` | 143,204 | Daily | `bin` | CO status / no-CO; no rows for the test BIN, so coverage is partial |
-| DOB NOW Certificate of Occupancy | `pkdm-hqz6` | 82,494 | Daily | `bin` | Newer COs |
-| DOB NOW Safety Boiler | `52dp-yji6` | 889,047 | Daily | `bin` | Boiler inspection filings |
-| DOB NOW Safety Facades (FISP/LL11) | `xubg-57si` | 87,302 | Weekdays | `bin` | Facade status for 6+ story buildings |
+| DOB Certificate of Occupancy (BIS) | `bs8b-p36w` | 143,214 | Daily | `bin_number` | Now in the report: the "Legal apartments" tile (§2.22). No rows for the test BIN, so coverage is partial |
+| DOB NOW Certificate of Occupancy | `pkdm-hqz6` | 82,494 | Daily | `bin` | Newer COs; not read (the request budget, §5) |
+| DOB NOW Safety Boiler | `52dp-yji6` | 889,703 | Daily | `bin_number` | Now in the report: the "Boiler inspection" tile (§2.22) |
+| DOB NOW Safety Facades (FISP/LL11) | `xubg-57si` | 87,325 | Weekdays | `bin` | Now in the report: the "Facade inspection" tile (§2.22) |
 | DOB Job Application Filings (BIS) / DOB NOW Build | `ic3t-wcy2` / `w9ak-ipjd` | 2.72M / 964k | Daily | `bin` | Active construction |
 | DOF Property Valuation and Assessment (classes 1–4) | `8y4t-faws` | large | Annually (2026-09-14) | `parid` = BBL (text) | `owner`, `units`, `yrbuilt`, `curmkttot`, `curtaxclass`; verified `parid=2025050046` → owner `1130 SHEVA REALTY HOUSING DEVELOPMENT FU ND CORP`, market value 1,312,000, tax class 2. Returns duplicate rows per year; dedupe. |
-| ACRIS Real Property Legals → Master → Parties | `8h5j-fqxa` → `bnx9-e6tj` → `636b-3b5g` | very large | Monthly | `borough`+`block`+`lot` → `document_id` | Last deed and grantee (true owner of record). Verified legals by `borough=2&block=2505&lot=46` returns document ids. Three-hop join; defer. |
+| ACRIS Real Property Legals → Master → Parties | `8h5j-fqxa` → `bnx9-e6tj` → `636b-3b5g` | very large | Monthly | `borough`+`block`+`lot` → `document_id` | The first two hops are now in the report: last sale and newest mortgage (§2.20). Parties (the names on a deed) would be a third hop and are not read. |
 | OATH Hearings Division Case Status | `jz4z-kudi` | 22.1M | Daily | ticket number | Only if ECB extract proves insufficient |
+
+Sections 2.17 to 2.23 were added and verified live on **2026-10-03**. Second test building for them: **1018 Eastern Parkway, Brooklyn 11213** (BIN `3037516`, BBL `3013950033`, HPD BuildingID `287492`), which has rows in most of these sets.
+
+### 2.17 DOHMH — Rodent Inspection (Violations section: failed rat inspections)
+
+- Agency: Department of Health and Mental Hygiene (DOHMH)
+- Page: https://data.cityofnewyork.us/d/p937-wjvj
+- Id: `p937-wjvj` — endpoint `https://data.cityofnewyork.us/resource/p937-wjvj.json`
+- Rows: 3,131,494. Update: **Daily** (last 2026-10-03).
+- Join keys: `bbl` (number), `boro_code`+`block`+`lot`, `bin` (text). The dictionary says "inspections are conducted at the taxlot level", so the report joins on BBL and calls the record the lot's. 103,299 rows have no `bbl`.
+- Columns to keep: `job_id`, `inspection_date`, `inspection_type`, `result`, `letter_type`, `observations`, `house_number`, `street_name`.
+- Live per address: yes.
+- Example: `https://data.cityofnewyork.us/resource/p937-wjvj.json?bbl=3013950033&$select=result,count(*)&$group=result`
+  → `Bait applied 74`, `Failed for Rat Activity 31`, `Failed for Rat Activity and Other Reason 26`, `Passed 7`, `Monitoring visit 5`, `Failed for Other Reason 2`: 145 visits, 59 of them failed inspections, the newest failure 2020-02-27, the newest visit a pass on 2026-02-27.
+- Gotchas:
+  - One row per **visit**, and most visits are not inspections. `inspection_type`: `Initial` 2,157,302, `Compliance` 480,611 (the follow-up after a failed initial), `Treatments` 475,859, `Stoppage` 14,298, `Clean Ups` 3,424. `result`: `Passed` 1,845,352, `Bait applied` 428,264, `Failed for Rat Activity` 402,576, `Failed for Other Reason` 259,931, `Failed for Rat Activity and Other Reason` 130,054, `Monitoring visit` 47,595, `Stoppage done` 14,298, `Cleanup done` 3,424.
+  - "Rat activity" is tracks, droppings, burrows, runways, gnawing or live rats. "Other reason" is garbage, harborage (clutter and overgrowth rats nest in), mice, or another animal nuisance such as pigeon droppings: so a `Failed for Other Reason` row can have nothing to do with rats. `observations` says which (`Burrows` 185,742, `Harborage` 151,300, `Droppings` 100,906, ..., `Mice` 20,677, `Animal Nuisance` 7,611); the headline names it when it is only mice or an animal.
+  - `job_id` is a case, not a visit: an initial inspection, its compliance inspection and every baiting visit that followed share one (one job at 1018 Eastern Parkway has 12 rows). It is not a row key.
+  - `letter_type` is `COTA` (1,397,639; the Commissioner's Order to Abate), `Summons Issued` (160,458), `City Agency Referral` (28,956) or blank. The dictionary says blank means a treatment or a pass, but `COTA` also appears on rows that passed.
+  - There is no "resolved" column. The report closes a failed inspection when the lot passes a later one, and gives that pass's date as the closing date (docs/RULES.md).
+  - No lot has more than 487 rows, and 76 lots have more than 200 (grouped query over the whole set). The query takes up to 500 visits of every kind, newest first (query y in §5), so today it never cuts a lot off; the rows listed are the failed ones, capped at 200.
+  - 1018 Eastern Parkway's rows go back to 2009, so its 59 failed inspections are spread over 17 years; each row carries its date.
+
+### 2.18 HPD — Emergency repair charges (Violations section: city emergency repairs)
+
+- Agency: HPD. Two tables of the "HPD Charge Data" collection:
+  - Open Market Order (OMO) Charges — https://data.cityofnewyork.us/d/mdbu-nrqn — `mdbu-nrqn`: work HPD contracted out. Rows: 514,504. Update: **Daily**.
+  - Handyman Work Order (HWO) Charges — https://data.cityofnewyork.us/d/sbnd-xujn — `sbnd-xujn`: work done by HPD's own staff. Rows: 99,690. Update: **Daily**.
+- Join keys: `buildingid` (number, on every row), `bin` (text; missing on 1,102 OMO and 129 HWO rows), `bbl` (text), `boro`+`block`+`lot`.
+- Columns to keep, OMO: `omonumber`, `apartment`, `lifecycle`, `worktypegeneral`, `omostatusreason`, `omoawardamount`, `omocreatedate`, `netchangeorders`, `omoawarddate`, `isaep`, `iscommercialdemolition`, `servicechargeflag`, `femaevent`, `omodescription`. HWO: `hwonumber`, `lifecycle`, `worktypegeneral`, `hwostatusreason`, `hwocreatedate`, `isaep`, `iscommercialdemolition`, `femaevent`, `hwodescription`, `hwoapprovedamount`, `salestax`, `adminfee`, `chargeamount`, `datetransferdof`.
+- Live per address: yes.
+- Example: `https://data.cityofnewyork.us/resource/mdbu-nrqn.json?bin=3037516&$select=count(*),sum(omoawardamount)` → `90`, `74901.00` (2004-07-14 to 2022-09-29); the same on `sbnd-xujn` with `sum(chargeamount)` → `23`, `3464.14`. 113 orders in all, 66 of them carried out.
+- **Keyed by BIN, not by HPD BuildingID.** `buildingid` is the datasets' own key, but the report only learns it from the jurisdiction or registration query, so keying on it would mean a second, serial round of requests that fails whenever those two do, and it is null for a building HPD has no record of. BIN is how every other HPD feed here is read, returns the same rows for both test buildings (90 and 23; 8 and 1 at 1130 Anderson), and also covers the 1.1% of BINs that have more than one HPD BuildingID (about 4,000 of the 357,000 in `kj4p-ruqc`). The cost is the 0.2% of orders with no BIN.
+- Gotchas:
+  - An order is not a repair. `omostatusreason` / `hwostatusreason` is why the order was closed: `OMO Completed` (286,936 OMO; 45,941 HWO, which use the same wording), `No Access` (67,553), `Landlord Complied` (26,929), `Utility Account Picked Up By ESB` (26,316), `Owner Refused Access` (21,605), `Refused Access`, `Other`, `Fuel Delivered`, `Work Done by Others`, `Work Partially Completed`, `LL/Agent refused access`, `Duplicate OMO`, `Condition Different than Stated`, `Complainant Refused`, `Tenant Refused Access`, `Work Not Started`, ..., and blank on 7,273 OMOs. The report says the city **made** the repair only for the reasons that say so (docs/RULES.md) and that it **ordered** it otherwise.
+  - Amounts are not the bill. HPD's dictionary (`HPD Charge Open Data.pdf`, notes 4 to 6 and 14): `omoawardamount` is what the vendor was awarded for the first scope of work, `netchangeorders` moves it, utility orders are awarded $1 because billing comes later, and a cancelled order with `servicechargeflag = True` owes the vendor a service charge, not the award. HWO has the real charge: `chargeamount` = `hwoapprovedamount` + `salestax` + `adminfee`, "total lienable amount to be transferred to DoF", with `datetransferdof`. The row's `amount` is award plus change orders (OMO) or `chargeamount` (HWO), and the summary's total counts only orders carried out.
+  - `worktypegeneral` is a code HPD publishes no list for. OMO: `GC` 289,221, `DELEAD` 120,837, `UTIL` 38,955, `PLUMB` 20,519, `HEAT` 15,976, `ASBEST` 7,857, `ELEC` 7,536, `STOPAG` 4,560, `DEMOL` 4,554, `ELEV` 1,674, `EXTERM` 883, `MISC` 882, `AEPFEE` 405, `7AFA` 399, `RUB` 105, `INTCOM` 55, `MOVE` 49, `ENGINR` 12, `APPL` 10, `IRON` 7, `MOLD` 6. HWO adds `7AWIND`, `7AHEAT`, `CCC`, `DE-50K`. The plain words in `compute.ts` (`REPAIR_WORK`) cover the codes that are plain from the code and from their orders' descriptions (`STOPAG` orders unclog drains and waste lines, `RUB` ones remove rubbish, `IRON` ones fix fire escapes); `MISC`, `MOVE`, `CCC` and the rest show as the code. `AEPFEE` (fees for program work) and `7AFA` (7A Financial Assistance, dictionary note 7) are charges rather than repairs and get their own headlines.
+  - `omodescription` is cut at 150 characters by the publisher, lower-cased, and both descriptions carry control characters (`\u001a`) where the source had line breaks; the report strips those. Descriptions can name tenants ("keep the belongings of ... in storage").
+  - HWO has no `apartment` column; the apartment is only in the description ("at apt # 16r"). OMO's `apartment` is empty on 130,824 rows. The report reads the apartment from the description when the column has none.
+  - The files hold charges "since July 1999"; 1018 Eastern Parkway's run from 2004 to 2022.
+
+### 2.19 HPD — City programs (Legal section)
+
+Three small HPD lists, each read by `bin` (number), each also carrying `building_id`:
+
+- **Alternative Enforcement Program** — https://data.cityofnewyork.us/d/hcir-3275 — `hcir-3275`. Rows: 4,387 (862 `AEP Active`, 3,525 `AEP Discharged`). Update: **Monthly** (last 2026-10-01). Each year HPD picks 250 "severely distressed" buildings (200 in rounds 1 to 6, 187 in round 7); round 19 began 2026-02-02.
+  - Keep: `aep_start_date`, `aep_round`, `current_status`, `discharge_date`, `of_b_c_violations_at_start`.
+  - One row per **stint**: a building can be selected again after a discharge (BuildingID `77585` has five rows). 1018 Eastern Parkway has two: round 6, 2013-01-31 to 2018-10-31, and round 16 from 2023-01-31, still `AEP Active`.
+  - `of_b_c_violations_at_start` is documented as the count of B and C violations open on the selection date, but it is the **same number on every one of a building's rows** (2,725 on both of 1018 Eastern Parkway's; 3,629 on all five of BuildingID `77585`'s), so it is one figure per building, not per stint. The report shows it and says so when a building has several stints.
+- **Heat Sensor Program** — https://data.cityofnewyork.us/d/h4mf-f24e — `h4mf-f24e`. Rows: 200. Update: **Monthly** (last 2026-08-01). Every two years from July 2020 HPD picks 50 buildings with heat violations and complaints that must install heat sensors.
+  - Keep: `program_start_date`, `current_status`, `discharge_date`.
+  - All 200 rows are `Active` and none has a `discharge_date`, including the ones from 2020: either nothing has been discharged or discharges aren't published. The report would close a row that had one. Neither test building is on it (example: BIN `1053660`, 70 West 128 Street, started 2025-06-11).
+- **Certification of No Harassment pilot building list** — https://data.cityofnewyork.us/d/bzxi-2tsw — `bzxi-2tsw`. Rows: 1,599. Update: **As needed** (last 2026-09-25; 1,147 rows were added 2022-06-24, the rest since). The owner of a listed building has to show there was no tenant harassment before the buildings department will approve demolition or major alteration permits.
+  - Keep: `date_added` and the six yes/no columns that say why the building is listed: `bqi` (Building Qualification Index over the threshold), `aep_order`, `discharged_7a`, `hpd_vacate_order`, `dob_vacate_order`, `harassment_finding`.
+  - `aep_order` is not an AEP order: its label and description are "Discharged AEP", "building was discharged from the HPD Alternative Enforcement Program". 1018 Eastern Parkway is listed with `bqi = Yes` and everything else `No`, although it was discharged from AEP in 2018 and is in it again.
+  - A building is on the list while it has a row; there is no removal date, so the record is always open.
+
+### 2.20 DOF — ACRIS (Landlord section: last sale, latest mortgage)
+
+- Agency: Department of Finance (DOF), Automated City Register Information System.
+- Real Property Legals — https://data.cityofnewyork.us/d/8h5j-fqxa — `8h5j-fqxa`: one row per document per lot it touches. Join: `borough`, `block`, `lot` (numbers). Keep: `document_id`.
+- Real Property Master — https://data.cityofnewyork.us/d/bnx9-e6tj — `bnx9-e6tj`: one row per document. Join: `document_id` (text). Keep: `doc_type`, `document_date`, `document_amt`, `recorded_datetime`, `percent_trans`.
+- Document Control Codes — `7isb-wh4c` (126 rows): what each `doc_type` is, and its class. Read once here, not per report.
+- Update: **Monthly** (both last 2026-09-08).
+- Two requests (query ae in §5): the lot's document ids, then those documents' types, dates and amounts.
+- Example: `borough=2&block=2505&lot=46` → 73 documents; among them `MTGE 2018-03-14 $1,475,000`, `DEED 2017-06-21 $1`, `DEED 1996-04-02 $0`, `MTGE 1992-09-04 $280,000`. For `borough=3&block=1395&lot=33`: 8 documents, the newest deed and mortgage both dated 1974-08-28 with amount 0.
+- Gotchas:
+  - **Slow when cold.** The legals query took 0.3 s to 10 s for a lot it hadn't just served (three query shapes, fifteen lots), whatever the shape; repeats take 0.3 s. Against the Worker's 9 s timeout some builds will lose the two lines.
+  - Document ids from 2003 on are 16 digits that start with the recording date (`2017062700295001`); older ones start with a borough prefix (`FT_2900005131590`, `BK_7430073200374`). The legals query sorts the digit ones first, newest first, and takes 120, since the only way to say "newest" is the id. Lot `1/972/1` (Stuyvesant Town) has 513 legal rows for 77 documents, hence the `$group`.
+  - Deeds: of the 34 types in the "deeds and other conveyances" class, the report counts `DEED`, `DEEDO`, `DEEDP`, `DEED, LE`, `DEED, RC`, `IDED` and `REIT`. Not corrections and confirmations (`CORRD`, `DEED COR`, `CONDEED`), timeshare deeds (`DEED, TS`), transfer-on-death deeds (`TODD`), leases, easements or contracts. Mortgages: `MTGE`, `M&CON`, `CMTG`. Not `AGMT` ("agreement", 8,777 recorded in 2026): it is often the consolidation of a building's older loans into one, with the full amount on it (lot `1/835/41`: an `AGMT` for $300,000,000 six weeks after a `MTGE` for $31,000,000), but it is also any other agreement, and nothing on the row says which. So "Latest mortgage" can understate what a building owes.
+  - `document_amt` is 0 on most documents from before the 1990s and on transfers that weren't sales; nominal amounts ($1, $10) are common too (1130 Anderson's 2017 deed is for $1). The report calls a deed a sale only above $100, shows "No sale price on record" when no deed qualifies, and notes a newer no-price deed beside an older sale.
+  - One deed can convey several lots and carries one amount for all of them. 530 East 169 Street's last sale is a 2013 deed for $51,500,000 that also conveys 2410 Washington Avenue (`8h5j-fqxa?document_id=2013102300198001` → 2 lots). Telling takes a third request, the deed's other legal rows, which the report doesn't make, so the line under the price says it is the deed's and can cover other lots.
+  - `document_date` is blank on some rows and decades before `recorded_datetime` on others (a 1974 deed recorded in 2009); the report uses the document's date, or the recording date when the document's is missing or not a plausible date.
+  - `percent_trans` is the share conveyed (100, or 0 on old rows); below 100 the line says so.
+  - **Condos**: the building's BBL is its billing lot (7501 to 7599), which has no deeds (`1/1223/7503` → 0 rows); each apartment is its own lot. The report asks ACRIS nothing for a billing lot and shows neither line.
+
+### 2.21 DOF — Tax Lien Sale Lists (Landlord section)
+
+- Page: https://data.cityofnewyork.us/d/9rz4-mjek — Id `9rz4-mjek`
+- Rows: 264,142. Update: **Every 6 months** (last 2025-12-01).
+- Join: `borough`, `block`, `lot` (numbers). Keep: `month`, `cycle`, `water_debt_only`.
+- Example: `https://data.cityofnewyork.us/resource/9rz4-mjek.json?borough=3&block=1395&lot=33&$order=month DESC` → 8 rows: the 90, 60, 30 and 10 day notices of the 2025 sale (2025-02-01 to 2025-05-01) and of the 2021 sale, all `water_debt_only = NO`.
+- Gotchas:
+  - A row is a **notice that the lot could be in the next lien sale**, not a sale: each sale has a `90 Day Notice`, `60 Day Notice`, `30 Day Notice`, `10 Day Notice` list and then `Final Sale` (2025: 29,972 → 26,511 → 21,546 → 18,445 → 4,545 sold). 1018 Eastern Parkway was on all four 2025 notices and not on the final list, so its debt was paid or pulled before the sale. The report shows the stage with the month.
+  - Sales in the data: 2019, 2020 (notices only), 2021, 2025. None from 2022 to 2024.
+  - `water_debt_only` is `YES`/`NO` in most years and `Y`/`N` in others; `cycle` is "10 Day Notice" or "10 Days Notice".
+  - No lot has more than 19 rows.
+
+### 2.22 Building facts tiles
+
+One request each, by BIN unless noted; a tile shows only when its dataset has something to say.
+
+- **Flood zone** — PLUTO (`64uk-42ks`, §2.11), no extra request: `firm07_flag` and `pfirm15_flag` are `1` when any part of the lot is in the 1%-a-year floodplain on FEMA's 2007 map or its 2015 preliminary map, and absent otherwise. Citywide: both 33,201 lots, 2007 only 1,535, 2015 only 32,625, neither 790,923. Neither test lot is in one.
+- **Facade inspection** — DOB NOW: Safety Facades Compliance Filings, https://data.cityofnewyork.us/d/xubg-57si — `xubg-57si`, 87,325 rows, every weekday. Keep: `cycle`, `filing_type`, `current_status`, `filing_status`, `filing_date`, `submitted_on`.
+  - `cycle` is **text** (`6` to `10`; `10` sorts before `6`), so the newest cycle is picked in code.
+  - Two status columns. `filing_status` is what that one report said (`SAFE`, `SWARMP`, `UNSAFE`, `No Report Filed`); `current_status` is where the cycle stands and is the same on every row of the cycle (350 Fifth Avenue, cycle 6: an initial report filed `UNSAFE`, an amended one `SWARMP`, and `current_status = SWARMP` on both). A cycle-10 report still under review has no `current_status` (252 rows have none); the report then uses its `filing_status`. `SWARMP` is "safe with a repair and maintenance program".
+  - `filing_type = Auto-Generated` (19,358 rows) is a row the city makes for a building that owes a report. 1130 Anderson Avenue has exactly one row: cycle 9, auto-generated, `No Report Filed`, with `late_filing_amt` and `failure_to_file_amt` of 56,000. PLUTO gives it six floors, so "only buildings over six stories" is not a rule to filter on. The dictionary doesn't say what the three amount columns are (accrued, assessed or billed), so they are not shown.
+  - 1018 Eastern Parkway (four floors) has no rows and gets no tile.
+- **Boiler inspection** — DOB NOW: Safety Boiler, https://data.cityofnewyork.us/d/52dp-yji6 — `52dp-yji6`, 889,703 rows, daily. Join: `bin_number` (number; not `bin`). Keep: `tracking_number`, `boiler_id`, `report_type`, `inspection_date`, `defects_exist`, filtered to `report_status` starting `Accepted` (873,360 rows; the rest are drafts and rejections).
+  - `inspection_date` is `MM/DD/YYYY 00:00:00` **text** and can't be sorted in the query; `tracking_number` starts with the filing year (`2026-30000000151Y1111-866761`), so the query sorts on that and the date is parsed in code.
+  - One row per filing per boiler. `report_type = Subsequent` (22,960) is the filing that corrects an inspection's defects (1130 Anderson, 2024: `Initial` 04/13 with defects, `Subsequent` 07/02 without). The tile takes each boiler's newest filing; a boiler whose newest inspection is more than two years before the building's newest is taken as replaced.
+  - 1018 Eastern Parkway: one boiler, inspected 2026-05-13, `defects_exist = Yes`. 1130 Anderson: 2026-03-10, `No`.
+- **Legal apartments** — DOB Certificate of Occupancy, https://data.cityofnewyork.us/d/bs8b-p36w — `bs8b-p36w`, 143,214 rows, daily. Join: `bin_number` (text). Keep: `c_o_issue_date`, `pr_dwelling_unit`, `issue_type`.
+  - The description says it holds certificates "issued from 7/12/2012 to March 2021", but the newest are from 2026-10-02: it is still updated. It has only certificates issued since 2012 through the older system, so a prewar building that never needed a new one has no row (neither test building does), and newer ones can be in `pkdm-hqz6` instead, which is not read.
+  - `pr_dwelling_unit` is present on 98,649 rows. 93,806 rows are `Temporary` certificates, renewed every few months, so a building can have dozens. One row is dated `2105-11-05`; the tile takes the newest certificate that isn't in the future.
+- **Work permits in 12 months** — DOB NOW: Build – Approved Permits, https://data.cityofnewyork.us/d/rbx6-tga4 — `rbx6-tga4`, 1,010,055 rows, daily. Keep (aggregated): `work_type`, `count(distinct work_permit)`, `max(issued_date)`, where `issued_date` is in the last 365 days.
+  - One row per **issuance**: `filing_reason` is `Initial Permit` (685,442), `Renewal Permit Without Changes` (261,161), `Renewal Permit with Changes` (56,325). 1130 Anderson's sidewalk shed has four rows since 2024 for one permit, so permits are counted by `work_permit`.
+  - DOB NOW only: permits filed in the older system (`ipu4-2q9a`, whose count by BIN timed out at 30 s), and electrical, elevator and limited-alteration permits, are in other datasets. So no tile is shown for zero. 1018 Eastern Parkway: none in twelve months. 1130 Anderson: 1, `Sidewalk Shed`.
+- **Asbestos abatement filings** — DEP Asbestos Control Program (ACP7), https://data.cityofnewyork.us/d/vq35-j9qm — `vq35-j9qm`, 406,103 rows for 72,924 projects, monthly. Keep (grouped): `tru`, `start_date`, `status_description`.
+  - One row per floor and material of a project; `tru` is the project. Filings start 2017-11.
+  - `end_date` is "date filed + 364 days", not when the work ended, so it is not shown. `status_description`: `Closed` 282,817, `Submitted` 72,849, `Postponed` 50,437.
+  - 13 projects have start dates after 2027, up to the year 2423; the tile's "latest" is the newest that starts within a year of the report. Neither test building has a filing.
+
+### 2.23 Rent stabilization hint from tax exemptions
+
+The question: can one request say that a lot has a 421-a or J-51 tax benefit, which generally comes with rent-stabilized apartments? Yes, as a hint.
+
+- **J-51 Exemption and Abatement (Historical)** — `y7az-s7wc`: "data earlier than tax year 2019 and is not updated" (rows last updated 2019-03-14). It can say a building once had J-51, not that it does now. Not used.
+- **Property Exemption Detail** — https://data.cityofnewyork.us/d/muvi-b6kx — `muvi-b6kx`, about 3.6 million rows, **every 6 months** (last 2026-09-15): one row per lot, exemption, tax year (`year` 2021 to 2027) and roll (`period` 1 tentative, 3 final). Join: `parid` (text) = BBL. A query by `boro`/`block`/`lot` finds nothing because `block` and `lot` are text; and 1018 Eastern Parkway has no rows by `parid` either: it has no exemption.
+- The dataset's dictionary doesn't define `exmp_code`. DOF's **Exemption Classification Codes** (`myn9-hwsy`, 243 rows) does: `1920` is `J51`; `5110`, `5113`, `5114`, `5116`, `5117`, `5118`, `5119`, `5120`, `5121`, `5122`, `5123` are `421A ...` (10 to 35 year schedules). Its lettered variants (`1920S`, `5110-C`) never appear in `exmp_code`. Neighbours that are something else: `5112` UDAAP, `5129` DAMP, `5130` Article XI (1130 Anderson's), `5124` on 467-m, `5132` on 485-x, `1925` 421-g.
+- The signal: a row for the lot with one of those twelve codes, `status` starting `A` (approved; blank and `DL` rows are lapsed or revoked exemptions with zero value), `curexmptot > 0`, and `year` equal to the tax year the report is made in (July to June, named for the year it ends in). On the FY2027 final roll 16,542 J-51 rows and about 42,200 421-a rows are approved.
+- Why it is only a hint, and worded "May be rent stabilized": the benefit is the lot's, not an apartment's; units a condo or co-op owner lives in aren't regulated, and under the newest 421-a schedules market-rate units above a rent threshold aren't either. A condo building's exemptions sit on its apartments' lots, so its billing lot shows nothing. J-51 **abatements** without an exemption are in another dataset (`rgyu-ii48`) and are missed. No tile claims the absence of rent stabilization.
 
 ---
 
@@ -480,7 +602,36 @@ Input: `"1130 Anderson Ave, Bronx"` (free text).
    - x. BIS violations, every status (added; the active query d stays as it is):
      `GET https://data.cityofnewyork.us/resource/3h2n-5cm9.json?bin=2003068&$select=number,violation_number,violation_type_code,violation_type,violation_category,issue_date,disposition_date,disposition_comments,description,device_number,ecb_number&$order=issue_date DESC&$limit=300`
      → 29 rows; 4 repeat a DOB NOW violation and are listed once (§2.6).
-4. **Merge** into one JSON (shape in §6), stamp `fetched_at`, each section's `source_updated_at` from the dataset's `rowsUpdatedAt`, and the PAD `version`.
+
+   Rat inspections, city repairs, city programs, property records and building facts (added 2026-10-03; verified live for 1018 Eastern Parkway, BIN `3037516`, BBL `3013950033`, and 1130 Anderson Ave; datasets in §2.17 to §2.23). Fifteen more requests: fourteen join the parallel round, and the ACRIS documents request follows it beside the contacts hop. **44 requests per report at most** (42 in parallel, then 2), where 29 were. A Worker invocation on the free plan gets 50 subrequests and the address lookup takes one or two, so a build now does nothing else that fetches: the eight dataset "last updated" stamps (one metadata request each when KV was cold) are no longer fetched, since no page shows them, and the landing page's sample gets its AI summary from a later request than the one that builds it. A condo building makes 42 (no ACRIS), and a lot with no documents or a building with no registration one fewer each.
+   - y. Every health department visit to the lot, newest first; the failed inspections become rows:
+     `GET https://data.cityofnewyork.us/resource/p937-wjvj.json?bbl=3013950033&$select=job_id,inspection_date,inspection_type,result,letter_type,observations,house_number,street_name&$order=inspection_date DESC&$limit=500`
+     → 145 rows, 59 failed, all closed by the pass of 2022-09-27 or an earlier one.
+   - z. Emergency repairs contracted out:
+     `GET https://data.cityofnewyork.us/resource/mdbu-nrqn.json?bin=3037516&$select=omonumber,apartment,lifecycle,worktypegeneral,omostatusreason,omoawardamount,omocreatedate,netchangeorders,omoawarddate,isaep,iscommercialdemolition,servicechargeflag,femaevent,omodescription&$order=omocreatedate DESC&$limit=200`
+     → 90 rows.
+   - aa. Emergency repairs by HPD staff:
+     `GET https://data.cityofnewyork.us/resource/sbnd-xujn.json?bin=3037516&$select=hwonumber,lifecycle,worktypegeneral,hwostatusreason,hwocreatedate,isaep,iscommercialdemolition,femaevent,hwodescription,hwoapprovedamount,salestax,adminfee,chargeamount,datetransferdof&$order=hwocreatedate DESC&$limit=200`
+     → 23 rows.
+   - ab. `GET https://data.cityofnewyork.us/resource/hcir-3275.json?bin=3037516&$select=aep_start_date,of_b_c_violations_at_start,current_status,discharge_date,aep_round&$order=aep_start_date DESC` → 2 rows.
+   - ac. `GET https://data.cityofnewyork.us/resource/h4mf-f24e.json?bin=3037516&$select=program_start_date,current_status,discharge_date&$order=program_start_date DESC` → 0 rows.
+   - ad. `GET https://data.cityofnewyork.us/resource/bzxi-2tsw.json?bin=3037516&$select=date_added,bqi,aep_order,discharged_7a,hpd_vacate_order,dob_vacate_order,harassment_finding&$order=date_added DESC` → 1 row, added 2022-06-24.
+   - ae. The lot's newest 120 documents, then their types, dates and amounts (skipped for a condo billing lot, 7501 to 7599):
+     `GET https://data.cityofnewyork.us/resource/8h5j-fqxa.json?borough=3&block=1395&lot=33&$select=document_id&$group=document_id&$order=case(document_id < 'A',1,true,0) DESC,document_id DESC&$limit=120`
+     → 8 ids, then
+     `GET https://data.cityofnewyork.us/resource/bnx9-e6tj.json?$where=document_id in ('2009090900739001','FT_3800001383980',…) AND doc_type in ('DEED','DEEDO','DEEDP','DEED, LE','DEED, RC','IDED','REIT','MTGE','M&CON','CMTG')&$select=document_id,doc_type,document_date,document_amt,recorded_datetime,percent_trans&$order=recorded_datetime DESC&$limit=120`
+     → 4 rows: three deeds and a mortgage from 1974, all with amount 0.
+   - af. `GET https://data.cityofnewyork.us/resource/9rz4-mjek.json?borough=3&block=1395&lot=33&$select=month,cycle,water_debt_only&$order=month DESC&$limit=50` → 8 rows, newest `2025-05-01`, `10 Day Notice`, `NO`.
+   - ag. `GET https://data.cityofnewyork.us/resource/xubg-57si.json?bin=3037516&$select=cycle,filing_type,current_status,filing_status,filing_date,submitted_on&$order=submitted_on DESC&$limit=100` → 0 rows (1130 Anderson: 1, cycle 9, `No Report Filed`).
+   - ah. `GET https://data.cityofnewyork.us/resource/52dp-yji6.json?bin_number=3037516&$where=starts_with(report_status,'Accepted')&$select=tracking_number,boiler_id,report_type,inspection_date,defects_exist&$order=tracking_number DESC&$limit=100` → 3 rows, newest `05/13/2026`, `defects_exist Yes`.
+   - ai. `GET https://data.cityofnewyork.us/resource/bs8b-p36w.json?bin_number=3037516&$where=pr_dwelling_unit IS NOT NULL&$select=c_o_issue_date,pr_dwelling_unit,issue_type&$order=c_o_issue_date DESC&$limit=10` → 0 rows.
+   - aj. `GET https://data.cityofnewyork.us/resource/rbx6-tga4.json?bin=3037516&$where=issued_date > '2025-10-03'&$select=work_type,count(distinct work_permit) as permits,max(issued_date) as latest&$group=work_type&$order=permits DESC` → 0 rows (1130 Anderson: `Sidewalk Shed 1`).
+   - ak. `GET https://data.cityofnewyork.us/resource/vq35-j9qm.json?bin=3037516&$select=tru,start_date,status_description&$group=tru,start_date,status_description&$order=start_date DESC&$limit=500` → 0 rows.
+   - al. `GET https://data.cityofnewyork.us/resource/muvi-b6kx.json?parid=3013950033&$where=status like 'A%' AND curexmptot > 0 AND exmp_code in ('1920','5110','5113','5114','5116','5117','5118','5119','5120','5121','5122','5123')&$select=year,period,exmp_code,curexmptot&$order=year DESC,period DESC&$limit=10` → 0 rows (lot `1000160185`: `2027`, `5116`, a 421-a exemption).
+   - PLUTO (l) also selects `landuse`, `yearalter1`, `yearalter2`, `firm07_flag` and `pfirm15_flag`.
+
+   Response times on the evening of 2026-10-03 were far from the 0.3 to 0.5 s of §3. A single filtered request on a small dataset (`tb8q-a3ar` by BIN) answered in 0.2 s or in 5 to 14 s, all of the wait before the first byte, so the server and not the network. Bursts drew `503 Service unavailable` within half a second on up to a third of their requests, mostly when one build followed another inside a minute. The 29-request build that predates these additions was hit like the 44-request one: three builds a minute or more apart had 3 `503`s and 8 of 29 requests over 9 s, then none and 13 of 44, then none and 12 of 44. Against the Worker's 9 s timeout either build would have lost datasets that evening. Worth measuring again on another day before reading anything into it.
+4. **Merge** into one JSON (shape in §6), stamp `fetched_at` and the PAD `version`. (The per-dataset `rowsUpdatedAt` stamps were dropped with the "Where this comes from" section; `sources` is an empty list now.)
 5. **Persist** the merged JSON keyed by `(bin, bbl, fetched_at)` so the PDF reads the same object the user saw.
 
 ---

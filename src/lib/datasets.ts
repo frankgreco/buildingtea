@@ -1,7 +1,10 @@
 // The city datasets we read and the exact queries we run per building.
 // Every id, column and join key here was verified live on 2026-10-02 (the complaint-history
-// lists and the all-status violation queries on 2026-10-03); see docs/RESEARCH.md.
-// 29 city requests per report: 28 here in parallel, plus the registration contacts hop.
+// lists, the all-status violation queries and everything from rat inspections down on 2026-10-03);
+// see docs/RESEARCH.md.
+// 44 city requests per report at most: 42 here in parallel, then the registration contacts and the
+// lot's deeds and mortgages, each of which needs an id from the first 42. A Worker on the free plan
+// gets 50 subrequests, and the address lookup takes one or two of them.
 
 import { soda, lit, type Row, type SodaOptions } from "./soda";
 
@@ -22,6 +25,21 @@ export const DATASETS = {
   evictions: { id: "6z8x-wfk4", name: "Evictions (DOI marshals)" },
   n311: { id: "erm2-nwe9", name: "311 service requests" },
   pluto: { id: "64uk-42ks", name: "Building facts (DCP PLUTO)" },
+  ratInspections: { id: "p937-wjvj", name: "Rat inspections (Health Dept)" },
+  repairOrders: { id: "mdbu-nrqn", name: "Emergency repairs by contractors (HPD open market orders)" },
+  handymanOrders: { id: "sbnd-xujn", name: "Emergency repairs by city staff (HPD handyman work orders)" },
+  aep: { id: "hcir-3275", name: "Alternative Enforcement Program (HPD)" },
+  heatSensors: { id: "h4mf-f24e", name: "Heat Sensor Program (HPD)" },
+  harassmentList: { id: "bzxi-2tsw", name: "Certification of No Harassment pilot building list (HPD)" },
+  acrisLegals: { id: "8h5j-fqxa", name: "Property records by lot (ACRIS)" },
+  acrisMaster: { id: "bnx9-e6tj", name: "Property documents (ACRIS)" },
+  taxLiens: { id: "9rz4-mjek", name: "Tax lien sale lists (DOF)" },
+  facades: { id: "xubg-57si", name: "Facade inspection filings (DOB NOW)" },
+  boilers: { id: "52dp-yji6", name: "Boiler inspection filings (DOB NOW)" },
+  certificates: { id: "bs8b-p36w", name: "Certificates of occupancy (DOB)" },
+  permits: { id: "rbx6-tga4", name: "Approved work permits (DOB NOW)" },
+  asbestos: { id: "vq35-j9qm", name: "Asbestos abatement filings (DEP)" },
+  exemptions: { id: "muvi-b6kx", name: "Property tax exemptions (DOF)" },
 } as const;
 
 export type DatasetKey = keyof typeof DATASETS;
@@ -80,6 +98,37 @@ export interface RawBuildingData {
    * index and docket numbers, marshal, and the possession and ejectment flags (docs/RESEARCH.md 5 t).
    */
   evictions: Row[];
+  /**
+   * Every health department visit to the lot, newest first, at most RAT_VISITS: inspections that
+   * passed or failed, baiting, clean-ups. Only failed inspections become rows; the rest say whether
+   * a failure was followed by a pass (docs/RESEARCH.md 2.17).
+   */
+  ratInspections: Row[];
+  /** Emergency repair orders HPD gave a contractor, newest first, at most VIOLATION_LIMITS.repairs. */
+  repairOrders: Row[];
+  /** Emergency repair orders HPD's own staff carried out, newest first, at most VIOLATION_LIMITS.repairs. */
+  handymanOrders: Row[];
+  /** One row per stint in the Alternative Enforcement Program, newest first. */
+  aep: Row[];
+  /** One row per stint in the Heat Sensor Program. */
+  heatSensors: Row[];
+  /** The building's row on the Certification of No Harassment pilot list, when it is on it. */
+  harassmentList: Row[];
+  /** The lot's deeds and mortgages from ACRIS, newest recording first. Empty for a condo building (see `isCondoBillingLot`). */
+  acrisDocs: Row[];
+  /** Every time the lot was on a tax lien sale list, newest first. */
+  taxLiens: Row[];
+  facades: Row[];
+  /** Accepted boiler inspection filings, newest filing year first. Dates are MM/DD/YYYY text. */
+  boilers: Row[];
+  /** Certificates of occupancy that state a number of dwelling units, newest first. */
+  certificates: Row[];
+  /** DOB NOW permits issued in the last twelve months, counted by work type. */
+  permits: Row[];
+  /** Asbestos abatement projects, one row each, newest start first. */
+  asbestos: Row[];
+  /** Approved 421-a and J-51 exemptions on the lot, newest tax year first. */
+  exemptions: Row[];
   /** Datasets whose fetch failed; the report marks these sections unavailable. */
   failed: string[];
 }
@@ -97,8 +146,42 @@ export const COMPLAINT_LIMITS = { hpd: 1000, dob: 500, n311: 500 } as const;
  * (unless a building has more open rows than the limit).
  * HPD is 500, not 1000: a report is one D1 row (2 MB cap), and at 1000 the heaviest building we
  * tried (530 E 169 St, Bronx: 4,849 HPD violations, 1,155 open) stored 1.68 MB; at 500 it stores 1.31 MB.
+ * `rats` caps the failed inspections listed and `repairs` each of the two repair-order queries; with
+ * that building's 85 and 163 of them, and its legal records, it stores 1.55 MB.
  */
-export const VIOLATION_LIMITS = { hpd: 500, dobNow: 300, ecb: 300, bis: 300 } as const;
+export const VIOLATION_LIMITS = { hpd: 500, dobNow: 300, ecb: 300, bis: 300, rats: 200, repairs: 200 } as const;
+
+/**
+ * Health department visits read per lot. Every visit is needed, not only the failed inspections: a
+ * failure is closed by a later pass. No lot in the city has more than 487 (2026-10-03).
+ */
+export const RAT_VISITS = 500;
+
+/** ACRIS documents looked up per lot: the newest this many of whatever is recorded against it. */
+export const ACRIS_DOCS = 120;
+
+/**
+ * ACRIS document types, from its own code table (7isb-wh4c). Deeds are the conveyances it calls a
+ * deed, less the ones that only correct or confirm an earlier one and timeshare deeds. Mortgages
+ * are the types it calls a mortgage; an "agreement" (AGMT) can be a consolidation of older loans or
+ * anything else, so it is not one.
+ */
+export const DEED_TYPES = ["DEED", "DEEDO", "DEEDP", "DEED, LE", "DEED, RC", "IDED", "REIT"] as const;
+export const MORTGAGE_TYPES = ["MTGE", "M&CON", "CMTG"] as const;
+
+/**
+ * Exemption codes for the two tax breaks that come with rent stabilization, as the finance
+ * department's code table (myn9-hwsy) describes them: 1920 is "J51" and the rest are "421A ...".
+ * Its lettered variants (1920S, 5110-C) never appear in the exemption rows.
+ */
+export const J51_CODE = "1920";
+export const A421_CODES = ["5110", "5113", "5114", "5116", "5117", "5118", "5119", "5120", "5121", "5122", "5123"] as const;
+
+/** A condo building's own lot (7501-7599) is a billing lot: deeds are recorded against each apartment's lot instead. */
+export function isCondoBillingLot(bbl: string): boolean {
+  const lot = Number(bbl.slice(6));
+  return lot >= 7501 && lot <= 7599;
+}
 
 /**
  * Row limits for the legal history: housing court cases (newest first; set well above what a building
@@ -337,7 +420,8 @@ export async function fetchBuildingData(bin: string, bbl: string, now: Date, opt
         D.pluto.id,
         {
           bbl,
-          $select: "address,zipcode,ownername,yearbuilt,yearalter1,yearalter2,unitsres,unitstotal,numbldgs,numfloors,bldgclass,landuse,zonedist1,histdist,landmark,condono,version",
+          $select:
+            "address,zipcode,ownername,yearbuilt,yearalter1,yearalter2,unitsres,unitstotal,numbldgs,numfloors,bldgclass,landuse,zonedist1,histdist,landmark,condono,firm07_flag,pfirm15_flag,version",
         },
         opts,
       ),
@@ -356,6 +440,113 @@ export async function fetchBuildingData(bin: string, bbl: string, now: Date, opt
           $select: "executed_date,eviction_apt_num,court_index_number,docket_number,marshal_first_name,marshal_last_name,ejectment,eviction_possession",
           $order: "executed_date DESC",
           $limit: LEGAL_LIMITS.evictions,
+        },
+        opts,
+      ),
+
+    // ---- Violations section: failed rat inspections and city emergency repairs (docs/RESEARCH.md 2.17, 2.18) ----
+    // Rat inspections are of the tax lot. The location, community and BIN columns repeat what the report has.
+    ratInspections: () =>
+      soda(
+        D.ratInspections.id,
+        { bbl, $select: "job_id,inspection_date,inspection_type,result,letter_type,observations,house_number,street_name", $order: "inspection_date DESC", $limit: RAT_VISITS },
+        opts,
+      ),
+    // By BIN like every other HPD feed here, not by HPD's building id: that id is only known once the
+    // jurisdiction query is back, and 1% of BINs have more than one.
+    repairOrders: () =>
+      soda(
+        D.repairOrders.id,
+        {
+          bin,
+          $select:
+            "omonumber,apartment,lifecycle,worktypegeneral,omostatusreason,omoawardamount,omocreatedate,netchangeorders,omoawarddate,isaep,iscommercialdemolition,servicechargeflag,femaevent,omodescription",
+          $order: "omocreatedate DESC",
+          $limit: VIOLATION_LIMITS.repairs,
+        },
+        opts,
+      ),
+    handymanOrders: () =>
+      soda(
+        D.handymanOrders.id,
+        {
+          bin,
+          $select:
+            "hwonumber,lifecycle,worktypegeneral,hwostatusreason,hwocreatedate,isaep,iscommercialdemolition,femaevent,hwodescription,hwoapprovedamount,salestax,adminfee,chargeamount,datetransferdof",
+          $order: "hwocreatedate DESC",
+          $limit: VIOLATION_LIMITS.repairs,
+        },
+        opts,
+      ),
+
+    // ---- Legal section: city programs (docs/RESEARCH.md 2.19) ----
+    aep: () =>
+      soda(D.aep.id, { bin, $select: "aep_start_date,of_b_c_violations_at_start,current_status,discharge_date,aep_round", $order: "aep_start_date DESC" }, opts),
+    heatSensors: () => soda(D.heatSensors.id, { bin, $select: "program_start_date,current_status,discharge_date", $order: "program_start_date DESC" }, opts),
+    harassmentList: () =>
+      soda(D.harassmentList.id, { bin, $select: "date_added,bqi,aep_order,discharged_7a,hpd_vacate_order,dob_vacate_order,harassment_finding", $order: "date_added DESC" }, opts),
+
+    // ---- Landlord section: the lot's property records (docs/RESEARCH.md 2.20, 2.21) ----
+    // The documents recorded against the lot, newest first: ids from 2003 on start with the recording
+    // date, older ones with a borough prefix. Their types, dates and amounts are the second hop below.
+    acrisLegals: () =>
+      isCondoBillingLot(bbl)
+        ? Promise.resolve<Row[]>([])
+        : soda(
+            D.acrisLegals.id,
+            { ...lotOf(bbl), $select: "document_id", $group: "document_id", $order: "case(document_id < 'A',1,true,0) DESC,document_id DESC", $limit: ACRIS_DOCS },
+            opts,
+          ),
+    taxLiens: () => soda(D.taxLiens.id, { ...lotOf(bbl), $select: "month,cycle,water_debt_only", $order: "month DESC", $limit: 50 }, opts),
+
+    // ---- Building facts tiles (docs/RESEARCH.md 2.22, 2.23) ----
+    // `cycle` is text ("10" sorts before "9"), so the newest cycle is picked in code.
+    facades: () =>
+      soda(D.facades.id, { bin, $select: "cycle,filing_type,current_status,filing_status,filing_date,submitted_on", $order: "submitted_on DESC", $limit: 100 }, opts),
+    // `inspection_date` is MM/DD/YYYY text; the tracking number starts with the filing year.
+    boilers: () =>
+      soda(
+        D.boilers.id,
+        {
+          bin_number: bin,
+          $where: "starts_with(report_status,'Accepted')",
+          $select: "tracking_number,boiler_id,report_type,inspection_date,defects_exist",
+          $order: "tracking_number DESC",
+          $limit: 100,
+        },
+        opts,
+      ),
+    certificates: () =>
+      soda(
+        D.certificates.id,
+        { bin_number: bin, $where: "pr_dwelling_unit IS NOT NULL", $select: "c_o_issue_date,pr_dwelling_unit,issue_type", $order: "c_o_issue_date DESC", $limit: 10 },
+        opts,
+      ),
+    // One row per issuance, renewals included, so permits are counted by their own number.
+    permits: () =>
+      soda(
+        D.permits.id,
+        {
+          bin,
+          $where: `issued_date > ${lit(yearAgo)}`,
+          $select: "work_type,count(distinct work_permit) as permits,max(issued_date) as latest",
+          $group: "work_type",
+          $order: "permits DESC",
+        },
+        opts,
+      ),
+    // One row per floor and material of a project, so projects are grouped by their number.
+    asbestos: () =>
+      soda(D.asbestos.id, { bin, $select: "tru,start_date,status_description", $group: "tru,start_date,status_description", $order: "start_date DESC", $limit: 500 }, opts),
+    exemptions: () =>
+      soda(
+        D.exemptions.id,
+        {
+          parid: bbl,
+          $where: `status like 'A%' AND curexmptot > 0 AND exmp_code in (${[J51_CODE, ...A421_CODES].map(lit).join(",")})`,
+          $select: "year,period,exmp_code,curexmptot",
+          $order: "year DESC,period DESC",
+          $limit: 10,
         },
         opts,
       ),
@@ -385,20 +576,55 @@ export async function fetchBuildingData(bin: string, bbl: string, now: Date, opt
     if (failed.includes(from)) failed.push(name);
   }
 
-  // Contacts depend on the registration id.
-  let contacts: Row[] = [];
-  const regId = out.registration?.[0]?.registrationid;
-  if (regId) {
+  // Two requests need an id from the ones above, and run side by side: the registration's contacts,
+  // and the type, date and amount of the lot's documents.
+  const second = async (name: string, run: (() => Promise<Row[]>) | null): Promise<Row[]> => {
+    if (!run) return [];
     try {
-      contacts = await soda(
-        DATASETS.hpdContacts.id,
-        { registrationid: regId, $select: "type,contactdescription,corporationname,firstname,lastname,businesshousenumber,businessstreetname,businessapartment,businesscity,businessstate,businesszip" },
-        opts,
-      );
+      return await run();
     } catch {
-      failed.push("contacts");
+      failed.push(name);
+      return [];
     }
-  }
+  };
+  const regId = out.registration?.[0]?.registrationid;
+  const docIds = (out.acrisLegals ?? []).map((r) => r.document_id).filter((id): id is string => !!id);
+  if (failed.includes("acrisLegals")) failed.push("acrisDocs");
+  const [contacts, acrisDocs] = await Promise.all([
+    second(
+      "contacts",
+      regId
+        ? () =>
+            soda(
+              D.hpdContacts.id,
+              { registrationid: regId, $select: "type,contactdescription,corporationname,firstname,lastname,businesshousenumber,businessstreetname,businessapartment,businesscity,businessstate,businesszip" },
+              opts,
+            )
+        : null,
+    ),
+    second(
+      "acrisDocs",
+      docIds.length
+        ? () =>
+            soda(
+              D.acrisMaster.id,
+              {
+                $where: `document_id in (${docIds.map(lit).join(",")}) AND doc_type in (${[...DEED_TYPES, ...MORTGAGE_TYPES].map(lit).join(",")})`,
+                $select: "document_id,doc_type,document_date,document_amt,recorded_datetime,percent_trans",
+                $order: "recorded_datetime DESC",
+                $limit: ACRIS_DOCS,
+              },
+              opts,
+            )
+        : null,
+    ),
+  ]);
 
-  return { ...(out as unknown as Omit<RawBuildingData, "fetchedAt" | "contacts" | "failed">), fetchedAt: now.toISOString(), contacts, failed };
+  const { acrisLegals: _ids, ...rows } = out;
+  return { ...(rows as unknown as Omit<RawBuildingData, "fetchedAt" | "contacts" | "acrisDocs" | "failed">), fetchedAt: now.toISOString(), contacts, acrisDocs, failed };
+}
+
+/** A BBL as the borough, block and lot numbers the finance department's datasets are keyed on. */
+function lotOf(bbl: string): { borough: number; block: number; lot: number } {
+  return { borough: Number(bbl[0]), block: Number(bbl.slice(1, 6)), lot: Number(bbl.slice(6)) };
 }

@@ -237,7 +237,7 @@ table.tv.cells tbody tr:last-child td { border-bottom: 0; }
 /* what colour means: a status in Violations, a topic in Complaints, a kind in Legal. Dots and side bars read --c. */
 .k-open { --c: var(--accent); } .k-closed, .k-other { --c: var(--muted); }
 .k-heat { --c: var(--series-2); } .k-plumbing { --c: var(--series-1); } .k-pest { --c: var(--series-3); } .k-noise { --c: var(--series-7); }
-.k-case { --c: var(--series-1); } .k-vacate { --c: var(--series-2); } .k-eviction { --c: var(--series-7); }
+.k-case { --c: var(--series-1); } .k-vacate { --c: var(--series-2); } .k-eviction { --c: var(--series-7); } .k-program { --c: var(--series-3); }
 
 /* the title row: two small icon buttons choose List or By place */
 .hist-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

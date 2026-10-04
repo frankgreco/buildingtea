@@ -34,6 +34,8 @@ export const VIOLATION_KINDS: { key: ViolationKind; name: string }[] = [
   { key: "paperwork", name: "Paperwork" },
   { key: "buildings", name: "Buildings dept." },
   { key: "summons", name: "City summons" },
+  { key: "rats", name: "Rat inspection" },
+  { key: "repairs", name: "City emergency repair" },
 ];
 
 /** A record's kind, with anything unrecognised read as paperwork. */

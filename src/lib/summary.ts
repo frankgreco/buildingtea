@@ -2,7 +2,7 @@
 // rewrites this using the same facts, so the page never depends on a model call.
 
 import type { Snapshot } from "@shared/snapshot";
-import type { Address, Bedbugs, Card, Counts, Cover, Ownership } from "@shared/types";
+import type { Address, Bedbugs, Card, Counts, Cover, Ownership, Report } from "@shared/types";
 
 export interface SummaryFacts {
   address: Address;
@@ -13,10 +13,55 @@ export interface SummaryFacts {
   cards: Card[];
   /** The numbers the page shows as its snapshot (shared/snapshot.ts). Absent on reports stored before the rows they are counted from. */
   snapshot?: Snapshot | null;
+  /** The headline facts of the records no card or snapshot number covers. Only the model's rewrite reads them. */
+  also?: AlsoOnFile | null;
+}
+
+/** Rat inspections, city repairs, city programs, the tax lien list and the flood zone, as a few flat facts. */
+export interface AlsoOnFile {
+  failedRatInspections: number;
+  /** Failed inspections the lot hasn't passed one since. */
+  failedRatInspectionsNotPassedSince: number;
+  latestFailedRatInspection: string | null;
+  /** Emergency repair orders the city wrote because the landlord hadn't made a repair, and how many it carried out. */
+  cityEmergencyRepairOrders: number;
+  cityEmergencyRepairsCarriedOut: number;
+  /** Dollars on the orders carried out, written out ("$34,570") so the model can quote it as it stands. */
+  cityEmergencyRepairsCarriedOutCost: string | null;
+  latestCityEmergencyRepairOrder: string | null;
+  /** The city programs the building is in now, by their headlines. */
+  activeCityPrograms: string[];
+  /** "May 2025, 10 Day Notice, not for water debt alone"; null when the lot was never listed. */
+  taxLienSaleList: string | null;
+  inFloodZone: boolean | null;
 }
 
 const fmt = (iso: string | null): string => (iso ? new Date(iso).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "an unknown date");
 const plural = (n: number, s: string, p = `${s}s`) => `${n} ${n === 1 ? s : p}`;
+
+/** Counted from the report's own rows, so the summary can't say what the page doesn't show. */
+export function alsoOnFile(r: Pick<Report, "violations" | "legal" | "property" | "cover">): AlsoOnFile {
+  const rows = Array.isArray(r.violations?.items) ? r.violations!.items : [];
+  const newest = (dates: (string | null)[]) => dates.filter((d): d is string => !!d).sort().pop() ?? null;
+  const rats = rows.filter((v) => v.source === "rats");
+  const repairs = rows.filter((v) => v.source === "repairs");
+  const made = repairs.filter((v) => v.done);
+  const programs = (Array.isArray(r.legal?.items) ? r.legal!.items : []).filter((x) => x.kind === "program" && x.status === "open");
+  const lien = r.property?.taxLien;
+  const flood = r.cover?.floodZone;
+  return {
+    failedRatInspections: rats.length,
+    failedRatInspectionsNotPassedSince: rats.filter((v) => v.status === "open").length,
+    latestFailedRatInspection: newest(rats.map((v) => v.date)),
+    cityEmergencyRepairOrders: repairs.length,
+    cityEmergencyRepairsCarriedOut: made.length,
+    cityEmergencyRepairsCarriedOutCost: made.length ? `$${Math.round(made.reduce((s, v) => s + (v.amount ?? 0), 0)).toLocaleString("en-US")}` : null,
+    latestCityEmergencyRepairOrder: newest(repairs.map((v) => v.date)),
+    activeCityPrograms: programs.map((x) => `${x.what}${x.date ? `, since ${fmt(x.date)}` : ""}`),
+    taxLienSaleList: lien ? `${fmt(lien.month)}, ${lien.stage}, ${lien.waterOnly ? "for water debt alone" : "not for water debt alone"}` : null,
+    inFloodZone: flood ? flood.firm2007 || flood.prelim2015 : null,
+  };
+}
 
 /**
  * The summary, written for the reader it almost always has: a renter about to decide whether to sign

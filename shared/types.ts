@@ -85,6 +85,38 @@ export interface Cover {
   housingProgram?: string | null;
   /** The raw program code ("PVT", "NYCHA"), so the page can tell private from the rest. */
   housingProgramCode?: string | null;
+  // The city's other building records, one tile each. Optional: reports stored before they were read
+  // lack them, and one whose query failed is left out. Null when the city has nothing on file.
+  /** Part of the lot is in the 1%-a-year floodplain on FEMA's 2007 map, or on its 2015 preliminary map (PLUTO). */
+  floodZone?: { firm2007: boolean; prelim2015: boolean } | null;
+  /** The newest facade inspection cycle on file. Only buildings taller than six stories have these. */
+  facade?: FacadeFiling | null;
+  /** The newest accepted boiler inspection filing of each boiler. */
+  boiler?: BoilerInspection | null;
+  /** Dwelling units on the newest certificate of occupancy that states them. */
+  legalUnits?: { units: number; date: string; temporary: boolean } | null;
+  /** DOB NOW work permits issued or renewed in the twelve months before the report; null when there were none. */
+  permits12mo?: { count: number; types: string[] } | null;
+  /** Asbestos abatement projects filed with the city since late 2017; null when there are none. */
+  asbestos?: { filings: number; latestStart: string | null; latestStatus: string | null } | null;
+  /** A 421-a or J-51 tax exemption on the current tax roll: a hint that rented apartments may be rent stabilized. */
+  taxBreak?: { program: "421-a" | "J-51"; taxYear: number } | null;
+}
+
+export interface FacadeFiling {
+  /** "Safe", "Safe with repairs needed", "Unsafe" or "No report filed". */
+  status: string;
+  cycle: number;
+  /** ISO date the cycle's newest report was filed; null when none was. */
+  filed: string | null;
+}
+
+export interface BoilerInspection {
+  /** ISO date of the newest inspection. */
+  inspected: string;
+  /** Boilers with a filing on record, and how many of their newest filings report defects. */
+  boilers: number;
+  withDefects: number;
 }
 
 export interface Counts {
@@ -206,20 +238,24 @@ export interface ComplaintHistory {
   truncated: { hpd: boolean; dob: boolean; n311: boolean };
 }
 
-/** Housing = HPD violations; buildings = DOB violations (DOB NOW and BIS); summons = DOB/OATH (ECB) summonses. */
-export type ViolationSource = "housing" | "buildings" | "summons";
+/**
+ * Housing = HPD violations; buildings = DOB violations (DOB NOW and BIS); summons = DOB/OATH (ECB)
+ * summonses; rats = failed health department rat inspections; repairs = emergency repairs HPD
+ * ordered and billed to the landlord. The snapshot counts only the first three (shared/snapshot.ts).
+ */
+export type ViolationSource = "housing" | "buildings" | "summons" | "rats" | "repairs";
 
 /**
- * What a violation is, for the chart's segments: the four HPD classes (C immediately hazardous,
- * B hazardous, A minor, I and the bedbug-report notices paperwork), then the two DOB feeds.
+ * What a violation is, in words for its details: the four HPD classes (C immediately hazardous,
+ * B hazardous, A minor, I and the bedbug-report notices paperwork), then one kind per other source.
  */
-export type ViolationKind = "immediate" | "hazardous" | "minor" | "paperwork" | "buildings" | "summons";
+export type ViolationKind = "immediate" | "hazardous" | "minor" | "paperwork" | "buildings" | "summons" | "rats" | "repairs";
 
-/** One violation or summons, open or closed, in plain English. */
+/** One violation, summons, failed rat inspection or city emergency repair, open or closed, in plain English. */
 export interface ViolationRecord {
   source: ViolationSource;
   kind: ViolationKind;
-  /** The city's id: HPD violationid, DOB violation number, or ECB violation number. */
+  /** The city's id: HPD violationid, DOB violation number, ECB violation number, rat inspection job, or work order number. */
   id: string;
   /** Every reference number the city gives it: "HPD violation 19212118 · NOV 10657096 · order 501". */
   ref: string;
@@ -229,12 +265,13 @@ export interface ViolationRecord {
   name?: string;
   /** "Apt 3B · kitchen", "Building", "Elevators 2P907". */
   where: string;
-  /** ISO date of the inspection (HPD) or issue (DOB, summons); null when the city has none. */
+  /** ISO date of the inspection (HPD, rats), issue (DOB, summons) or order (repairs); null when the city has none. */
   date: string | null;
+  /** A failed rat inspection is open until the lot passes a later one. A repair order is always closed. */
   status: "open" | "closed";
   /** The city's own status wording, tidied: "NOV sent out", "Violation dismissed", "Active". */
   cityStatus: string;
-  /** ISO date it closed, when the city publishes one (HPD status date, BIS disposition date). */
+  /** ISO date it closed, when the city publishes one (HPD status date, BIS disposition date, the rat inspection the lot next passed). */
   closedAt: string | null;
   /** ISO date HPD issued the notice of violation (housing only). */
   noticeDate?: string | null;
@@ -250,6 +287,13 @@ export interface ViolationRecord {
   hearingStatus?: string;
   /** Summonses: ISO date of the hearing. */
   hearingDate?: string | null;
+  /**
+   * Repairs: the dollars on the order, which is what a contractor was awarded (with change orders) or
+   * what city staff's work was charged at. The city's final bill to the landlord can differ.
+   */
+  amount?: number;
+  /** Repairs: true when the city's status says the work was done; false when the order was cancelled. */
+  done?: boolean;
   /** Every other published field worth a renter's time, as label and value. ISO dates are formatted by the page. */
   facts?: [string, string][];
   /** The apartment, normalised ("3B"), when the violation names one. Absent otherwise and on older reports. */
@@ -259,12 +303,12 @@ export interface ViolationRecord {
 }
 
 export interface ViolationHistory {
-  /** All three sources, newest first; undated last. */
+  /** Every source, newest first; undated last. */
   items: ViolationRecord[];
-  /** True when a query returned exactly its row limit, so some records are not listed. */
-  truncated: { housing: boolean; buildings: boolean; summons: boolean };
-  /** Housing: HPD violations ever recorded at this BIN. Buildings and summons: records listed (complete unless truncated). */
-  totals: { housing: number; buildings: number; summons: number };
+  /** True when a query returned exactly its row limit, so some records are not listed. Rats and repairs are absent on older reports. */
+  truncated: { housing: boolean; buildings: boolean; summons: boolean; rats?: boolean; repairs?: boolean };
+  /** Housing: HPD violations ever recorded at this BIN. The others: records listed (complete unless truncated). */
+  totals: { housing: number; buildings: number; summons: number; rats?: number; repairs?: number };
   /** Sources whose query failed, so the section can say they are missing rather than empty. */
   unavailable: ViolationSource[];
   /**
@@ -276,9 +320,10 @@ export interface ViolationHistory {
   lastYear?: { housing: { issued: number; open: number } };
 }
 
-export type LegalKind = "case" | "vacate" | "eviction";
+/** Program = a city enforcement program the building was put in, or a city watch list it is on. The snapshot counts only cases and vacate orders. */
+export type LegalKind = "case" | "vacate" | "eviction" | "program";
 
-/** One housing court case, vacate order or eviction, in plain English. */
+/** One housing court case, vacate order, eviction or city program, in plain English. */
 export interface LegalRecord {
   kind: LegalKind;
   /** Plain-English headline: "Court case: Tenant Action", "Vacate order: Fire damage", "Eviction carried out". */
@@ -287,11 +332,11 @@ export interface LegalRecord {
   name?: string;
   /** "Building", "Part of the building", "Apt 3B"; "" for an eviction with no apartment number. */
   where: string;
-  /** ISO date the case opened, the order took effect, or the eviction was carried out; null when the city has none. */
+  /** ISO date the case opened, the order took effect, the eviction was carried out, or the program began; null when the city has none. */
   date: string | null;
-  /** Open: a case that isn't closed, or an order still in effect. An eviction has happened, so it is closed. */
+  /** Open: a case that isn't closed, an order still in effect, a program the building is still in. An eviction has happened, so it is closed. */
   status: "open" | "closed";
-  /** ISO date a vacate order was lifted. */
+  /** ISO date a vacate order was lifted, or the building was discharged from a program. */
   closedAt: string | null;
   /** Every published field, as label and value, the status in words first. ISO dates are formatted by the page. */
   facts: [string, string][];
@@ -301,12 +346,35 @@ export interface LegalRecord {
 }
 
 export interface LegalHistory {
-  /** All three kinds, newest first; undated last. Evictions go back three years. */
+  /** Every kind, newest first; undated last. Evictions go back three years. */
   items: LegalRecord[];
   /** True when a query returned exactly its row limit, so some records are not listed. */
   truncated: { cases: boolean; evictions: boolean };
   /** Kinds whose query failed, so the section can say they are missing rather than empty. */
   unavailable: LegalKind[];
+}
+
+/**
+ * What the city's property records say about the lot, shown as lines in the Landlord section. A part
+ * is absent when its records didn't load, and null when the city lists nothing.
+ */
+export interface PropertyRecords {
+  /**
+   * The newest deed with a real price, from ACRIS. `price` is null when the lot has deeds but none
+   * names a price. Absent for a condo building: each apartment there is its own lot with its own deeds.
+   */
+  sale?: {
+    date: string | null;
+    price: number | null;
+    /** Percent of the property that deed conveyed, when it was less than all of it. */
+    share?: number;
+    /** ISO date of a newer deed that names no price: a transfer, not a sale. */
+    transferred?: string;
+  } | null;
+  /** The newest mortgage document on the lot. `amount` is null when it names none. */
+  mortgage?: { date: string | null; amount: number | null } | null;
+  /** The latest time the lot was on a city tax lien sale list: the month, the list's stage ("10 Day Notice", "Final Sale"), and whether the debt was water charges alone. */
+  taxLien?: { month: string; stage: string; waterOnly: boolean } | null;
 }
 
 export interface SourceStamp {
@@ -339,9 +407,12 @@ export interface Report {
   complaints: ComplaintHistory;
   /** Every violation and summons on file, open and closed. Absent on reports stored before it existed. */
   violations?: ViolationHistory;
-  /** Every housing court case, vacate order and eviction on file. Absent on reports stored before it existed. */
+  /** Every housing court case, vacate order, eviction and city program on file. Absent on reports stored before it existed. */
   legal?: LegalHistory;
+  /** The lot's last sale, newest mortgage and tax lien listing. Absent on reports stored before it existed. */
+  property?: PropertyRecords;
   links: Link[];
+  /** Always empty now: the section that showed these is gone. Reports stored before that have them. */
   sources: SourceStamp[];
 }
 
@@ -377,6 +448,7 @@ export interface Teaser {
   summaryLead: string;
   /** Absent on teasers stored before the preview took the report's format. */
   preview?: TeaserPreview;
+  /** Always empty now, as on the report. */
   sources: SourceStamp[];
 }
 

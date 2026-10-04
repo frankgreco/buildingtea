@@ -4,6 +4,7 @@
 import type {
   Address,
   Bedbugs,
+  BoilerInspection,
   Card,
   CardTable,
   ChartSeries,
@@ -11,15 +12,17 @@ import type {
   ComplaintHistory,
   ComplaintTopic,
   Counts,
+  Cover,
+  FacadeFiling,
   LegalHistory,
   LegalKind,
   LegalRecord,
   LineItem,
   Link,
   Ownership,
+  PropertyRecords,
   RecordArea,
   Report,
-  SourceStamp,
   Status,
   Teaser,
   TeaserPreview,
@@ -28,7 +31,18 @@ import type {
   ViolationSource,
 } from "@shared/types";
 import { normalizeUnit } from "@shared/address";
-import { COMPLAINT_LIMITS, LEGAL_LIMITS, VIOLATION_LIMITS, complaintWindowStart, type RawBuildingData } from "./datasets";
+import {
+  COMPLAINT_LIMITS,
+  DEED_TYPES,
+  J51_CODE,
+  LEGAL_LIMITS,
+  MORTGAGE_TYPES,
+  RAT_VISITS,
+  VIOLATION_LIMITS,
+  complaintWindowStart,
+  isCondoBillingLot,
+  type RawBuildingData,
+} from "./datasets";
 import type { Row } from "./soda";
 import {
   buildingClassFamily,
@@ -74,7 +88,6 @@ export interface ComputeInput {
   id: string;
   address: Address;
   raw: RawBuildingData;
-  sources: SourceStamp[];
   now: Date;
 }
 
@@ -102,6 +115,8 @@ const fmt = (iso: string | null): string => {
 };
 const plural = (n: number, s: string, p = `${s}s`) => `${n} ${n === 1 ? s : p}`;
 const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+/** Dollars as the city records them, with cents only when there are any: "$76.01", "$1,250", "-$50". */
+const dollars = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
 /** "NEW LAW  TENEMENT" -> "New law tenement". */
 const sentenceCase = (s: string) => {
   const t = s.replace(/\s+/g, " ").trim().toLowerCase();
@@ -953,7 +968,7 @@ export function computeComplaints(raw: RawBuildingData, now: Date): ComplaintHis
 function tidyStatus(s: string | undefined): string {
   const t = (s ?? "").replace(/\s+/g, " ").trim();
   if (!t) return "";
-  return sentenceCase(t).replace(/\b(nov|dob|ecb|hpd|oath)\b/gi, (m) => m.toUpperCase());
+  return sentenceCase(t).replace(/\b(nov|dob|ecb|hpd|oath|omo|hwo|esb|ll)\b/gi, (m) => m.toUpperCase());
 }
 
 /**
@@ -1118,10 +1133,173 @@ function summonsRecord(r: Row): ViolationRecord {
   };
 }
 
+// ---------- violation history: failed rat inspections ----------
+
+const ratResult = (r: Row) => upper(r.result);
+/** "Failed for Rat Activity", "Failed for Rat Activity and Other Reason", "Failed for Other Reason". */
+const isRatFailure = (r: Row) => ratResult(r).startsWith("FAILED");
+const RAT_VISIT: Record<string, string> = { INITIAL: "First inspection", COMPLIANCE: "Follow-up after a failed inspection" };
+/** COTA is the health department's Commissioner's Order to Abate; its other two values are already words. */
+const RAT_LETTER: Record<string, string> = { COTA: "Order to fix it sent to the owner (Commissioner's Order to Abate)" };
+
+/**
+ * "Other reason" is anything short of signs of rats: mostly garbage and clutter they feed and nest
+ * in ("harborage"), sometimes only mice or another animal, which the headline then names instead.
+ */
+function ratHeadline(r: Row): string {
+  const result = ratResult(r);
+  if (result === "FAILED FOR RAT ACTIVITY") return "Rats found by health inspectors";
+  if (result === "FAILED FOR RAT ACTIVITY AND OTHER REASON") return "Rats found by health inspectors, and conditions that attract them";
+  const seen = tidy(r.observations);
+  return seen && !/GARBAGE|HARBORAGE/i.test(seen) ? `Failed rat inspection: ${seen.toLowerCase()}` : "Failed rat inspection: conditions that attract rats";
+}
+
+/**
+ * The lot's failed rat inspections, newest first, at most VIOLATION_LIMITS.rats. `rows` is every
+ * health department visit: a failure is open until the lot passes a later inspection, and each row
+ * says what the newest visit of any kind found. Inspections are of the tax lot, so on a lot with
+ * several buildings they may be about another one, and the row says so.
+ */
+function ratRecords(rows: Row[], lotBuildings: number | null): ViolationRecord[] {
+  const visits = [...rows].sort((a, b) => ((a.inspection_date ?? "") < (b.inspection_date ?? "") ? 1 : (a.inspection_date ?? "") > (b.inspection_date ?? "") ? -1 : 0));
+  const passes = visits.filter((r) => ratResult(r) === "PASSED" && r.inspection_date).map((r) => r.inspection_date!).reverse();
+  const newest = visits.find((r) => r.inspection_date);
+  const baits = visits.filter((r) => ratResult(r) === "BAIT APPLIED" && r.inspection_date);
+  return visits
+    .filter(isRatFailure)
+    .slice(0, VIOLATION_LIMITS.rats)
+    .map((r) => {
+      const at = r.inspection_date;
+      const passed = at ? passes.find((d) => d > at) : undefined;
+      return {
+        source: "rats",
+        kind: "rats",
+        id: r.job_id ?? "",
+        ref: r.job_id ? `Rat inspection job ${r.job_id}` : "",
+        what: ratHeadline(r),
+        where: "Building",
+        date: day(at),
+        status: passed ? "closed" : "open",
+        cityStatus: tidy(r.result),
+        closedAt: day(passed),
+        original: [tidy(r.result), tidy(r.observations)].filter(Boolean).join(": "),
+        ...withFacts([
+          ["Inspection", RAT_VISIT[upper(r.inspection_type)] ?? r.inspection_type],
+          ["What inspectors saw", r.observations],
+          ["Notice or order issued", RAT_LETTER[upper(r.letter_type)] ?? r.letter_type],
+          ["Address inspected", [r.house_number, r.street_name].filter((s) => s && s.trim()).join(" ")],
+          ["Covers", (lotBuildings ?? 0) > 1 && `The whole tax lot, which has ${lotBuildings} buildings`],
+          ["Newest visit to this lot", newest && newest !== r && `${day(newest.inspection_date)} · ${tidy(newest.result)}`],
+          ["City put down rat bait here", baits.length > 0 && `${day(baits[0]!.inspection_date)}, the latest of ${plural(baits.length, "time")}`],
+        ]),
+        area: "building",
+      } satisfies ViolationRecord;
+    });
+}
+
+// ---------- violation history: city emergency repairs ----------
+
+/**
+ * HPD's `worktypegeneral` codes in plain words. HPD publishes no list of them (its dictionary only
+ * calls the column a "general description of type of work"), so these are the codes whose meaning
+ * is plain from the code and from the descriptions on their orders (docs/RESEARCH.md 2.18). Any
+ * other code gets no words in the headline and shows as the city writes it.
+ */
+const REPAIR_WORK: Record<string, string> = {
+  GC: "general repairs",
+  DELEAD: "lead paint",
+  UTIL: "utilities",
+  PLUMB: "plumbing",
+  HEAT: "heat",
+  ASBEST: "asbestos",
+  ELEC: "electrical",
+  STOPAG: "blocked drain or sewer line",
+  DEMOL: "demolition",
+  ELEV: "elevator",
+  EXTERM: "pest extermination",
+  RUB: "rubbish removal",
+  INTCOM: "intercom",
+  ENGINR: "engineering",
+  APPL: "appliances",
+  IRON: "ironwork",
+  MOLD: "mold",
+};
+/** Two work types that are charges, not repairs (notes 7 and 10 of HPD's charge data dictionary). */
+const REPAIR_CHARGE: Record<string, string> = {
+  AEPFEE: "City charged a fee for its enforcement program's work",
+  "7AFA": "City paid for repairs under a court-appointed administrator",
+};
+/**
+ * The status reasons that say the city did the work. Any other reason (no access, the landlord or
+ * someone else did it, a duplicate order) or none is an order the city didn't carry out.
+ */
+const REPAIR_DONE = new Set(["OMO COMPLETED", "WORK PARTIALLY COMPLETED", "REPAIR COMP, PROBLEM RESOLVED", "REPAIR COMPLETED,NEW HWO NEEDED", "FUEL DELIVERED", "HPD CLEAN/DUST TESTED"]);
+/** "at apt # 16r", "apt 14l, bedroom", "entire apartment: 4a": the apartment inside an order's description. */
+const REPAIR_APT_RE = /\bap(?:artmen)?t\.?\s*[#:]?\s*([0-9a-z][0-9a-z-]{0,5})\b/i;
+/** "at public hall", "public area:", "at roof": an order for the parts of the building everyone shares. */
+const REPAIR_COMMON_RE = /\bpublic\s?(?:halls?|areas?|parts?)\b|\b(?:lobby|vestibule|stairs?|cellar|basement|roof|bulkhead)\b/i;
+
+/**
+ * One emergency repair order: an open market order (given to a contractor) or a handyman work order
+ * (done by HPD's own staff). The order is always closed; whether the work was done is in the
+ * headline and in `done`. Handyman orders have no apartment column, so theirs is read from the
+ * description, as is an open market order's when its own is empty; an order that names no apartment
+ * but a hall, the roof or another shared part is in the common areas.
+ */
+function repairRecord(r: Row, by: "contractor" | "staff"): ViolationRecord {
+  const staff = by === "staff";
+  const number = tidy(staff ? r.hwonumber : r.omonumber);
+  const reason = tidy(staff ? r.hwostatusreason : r.omostatusreason);
+  const code = upper(r.worktypegeneral);
+  const work = REPAIR_WORK[code];
+  const done = REPAIR_DONE.has(reason.toUpperCase());
+  // Descriptions carry control characters where the city's system had line breaks.
+  const text = tidy((staff ? r.hwodescription : r.omodescription)?.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "));
+  const apt = complaintApartment(r.apartment) ?? complaintApartment(REPAIR_APT_RE.exec(text)?.[1]);
+  const unit = normalizeUnit(apt);
+  const common = !apt && REPAIR_COMMON_RE.test(text);
+  // An award is the contractor's price for the first scope of work; change orders move it.
+  const amount = staff ? numOrNull(r.chargeamount) : r.omoawardamount == null ? null : num(r.omoawardamount) + num(r.netchangeorders);
+  return {
+    source: "repairs",
+    kind: "repairs",
+    id: number,
+    ref: number ? `HPD ${staff ? "handyman work order" : "open market order"} ${number}` : "",
+    what: REPAIR_CHARGE[code] ?? `${done ? "City made an emergency repair" : "City ordered an emergency repair"}${work ? `: ${work}` : ""}`,
+    where: apt ? `Apt ${apt}` : common ? "Common area" : "Building",
+    date: day(staff ? r.hwocreatedate : r.omocreatedate),
+    status: "closed",
+    cityStatus: tidyStatus(reason) || "No status on file",
+    closedAt: null,
+    original: text,
+    ...(amount != null ? { amount } : {}),
+    done,
+    ...withFacts([
+      ["Work type", work ? `${capitalize(work)} (${code})` : r.worktypegeneral],
+      ["Work given to", staff ? "City staff" : "A contractor hired by the city"],
+      ["Awarded to the contractor", !staff && day(r.omoawarddate)],
+      ["Amount awarded", !staff && r.omoawardamount != null && dollars(num(r.omoawardamount))],
+      ["Change orders", !staff && num(r.netchangeorders) !== 0 && dollars(num(r.netchangeorders))],
+      ["Service charge for a cancelled visit", !staff && upper(r.servicechargeflag) === "TRUE" && "Yes"],
+      ["Cost of the work", staff && r.hwoapprovedamount != null && dollars(num(r.hwoapprovedamount))],
+      ["Sales tax", staff && num(r.salestax) > 0 && dollars(num(r.salestax))],
+      ["City's administrative fee", staff && num(r.adminfee) > 0 && dollars(num(r.adminfee))],
+      ["Charged to the landlord", staff && r.chargeamount != null && dollars(num(r.chargeamount))],
+      ["Sent to the finance department to collect", staff && day(r.datetransferdof)],
+      ["Under the Alternative Enforcement Program", upper(r.isaep) === "AEP" && "Yes"],
+      ["Commercial demolition", !!r.iscommercialdemolition?.trim() && "Yes"],
+      ["Disaster event", r.femaevent],
+      ["Building stage", upper(r.lifecycle) !== "STANDING BUILDING" && r.lifecycle],
+    ]),
+    ...(unit ? { area: "apartment" as const, unit } : { area: common ? ("common" as const) : ("building" as const) }),
+  };
+}
+
 /**
  * Every violation and summons we fetched, open and closed, newest first: HPD housing violations,
  * DOB violations from both systems (a BIS row that repeats a DOB NOW violation is listed once, as
- * the DOB NOW one; docs/RESEARCH.md 2.6), and DOB/OATH summonses.
+ * the DOB NOW one; docs/RESEARCH.md 2.6), and DOB/OATH summonses. With them, in the same list, the
+ * lot's failed rat inspections and the emergency repairs the city ordered at the building.
  */
 export function computeViolations(raw: RawBuildingData): ViolationHistory {
   const nowNumbers = new Set(raw.dobNowRows.map((r) => (r.violation_number ?? "").trim()).filter(Boolean));
@@ -1135,21 +1313,27 @@ export function computeViolations(raw: RawBuildingData): ViolationHistory {
   const housing = raw.hpdViolationRows.map(housingRecord);
   const buildings = [...raw.dobNowRows.map((r) => dobNowRecord(r, bisTwin.get((r.violation_number ?? "").trim()))), ...bis];
   const summons = raw.ecbRows.map(summonsRecord);
-  const items = [...housing, ...buildings, ...summons];
+  const rats = ratRecords(raw.ratInspections, numOrNull(raw.pluto[0]?.numbldgs));
+  const repairs = [...raw.repairOrders.map((r) => repairRecord(r, "contractor")), ...raw.handymanOrders.map((r) => repairRecord(r, "staff"))];
+  const items = [...housing, ...buildings, ...summons, ...rats, ...repairs];
   items.sort((a, b) => (a.date === b.date ? 0 : a.date === null ? 1 : b.date === null ? -1 : a.date < b.date ? 1 : -1));
   const failed = (...keys: string[]) => keys.some((k) => raw.failed.includes(k));
   const unavailable: ViolationSource[] = [];
   if (failed("hpdViolationRows")) unavailable.push("housing");
   if (failed("dobNowRows", "dobBisRows")) unavailable.push("buildings");
   if (failed("ecbRows")) unavailable.push("summons");
+  if (failed("ratInspections")) unavailable.push("rats");
+  if (failed("repairOrders", "handymanOrders")) unavailable.push("repairs");
   return {
     items,
     truncated: {
       housing: raw.hpdViolationRows.length >= VIOLATION_LIMITS.hpd,
       buildings: raw.dobNowRows.length >= VIOLATION_LIMITS.dobNow || raw.dobBisRows.length >= VIOLATION_LIMITS.bis,
       summons: raw.ecbRows.length >= VIOLATION_LIMITS.ecb,
+      rats: raw.ratInspections.length >= RAT_VISITS || raw.ratInspections.filter(isRatFailure).length > VIOLATION_LIMITS.rats,
+      repairs: raw.repairOrders.length >= VIOLATION_LIMITS.repairs || raw.handymanOrders.length >= VIOLATION_LIMITS.repairs,
     },
-    totals: { housing: Math.max(num(raw.hpdTotal[0]?.n), housing.length), buildings: buildings.length, summons: summons.length },
+    totals: { housing: Math.max(num(raw.hpdTotal[0]?.n), housing.length), buildings: buildings.length, summons: summons.length, rats: rats.length, repairs: repairs.length },
     unavailable,
     ...(failed("hpdYear")
       ? {}
@@ -1251,22 +1435,234 @@ function evictionRecord(r: Row): LegalRecord {
 }
 
 /**
+ * A stint in one of the housing department's two enforcement programs. The building is in it (open)
+ * until the city discharges it. The headline says what the program is in plain words; its official
+ * name is the "From" fact.
+ */
+function programRecord(r: Row, p: { what: string; from: string; started: string | undefined; more?: [string, string][] }): LegalRecord {
+  const started = day(p.started);
+  const discharged = day(r.discharge_date);
+  const out = !!discharged || /discharged/i.test(r.current_status ?? "");
+  return {
+    kind: "program",
+    what: p.what,
+    where: "Building",
+    date: started,
+    status: out ? "closed" : "open",
+    closedAt: discharged,
+    facts: [["Status", out ? "Discharged" : "Active"], ...fact("Started", started), ...fact("Discharged", discharged), ...(p.more ?? []), ["From", p.from]],
+    area: "building",
+  };
+}
+
+/**
+ * The Alternative Enforcement Program: each year the city picks its most distressed buildings and,
+ * until the owner fixes them, makes the repairs itself and bills them. The count of hazardous
+ * violations is repeated on every stint a building has had, so it may be from another one
+ * (docs/RESEARCH.md 2.19).
+ */
+const aepRecord = (r: Row, _i: number, all: Row[]): LegalRecord => {
+  const oneFigure = all.length > 1 && new Set(all.map((x) => x.of_b_c_violations_at_start)).size === 1;
+  return programRecord(r, {
+    what: "Put in the city's program for its worst-maintained buildings",
+    from: "Alternative Enforcement Program (HPD)",
+    started: r.aep_start_date,
+    more: [
+      ...fact("Round", tidy(r.aep_round).replace(/^aep\s+round\s*/i, "")),
+      ...fact(
+        `Hazardous violations open at the start${oneFigure ? " (the city gives one figure for all of this building's stints)" : ""}`,
+        r.of_b_c_violations_at_start?.trim() ? num(r.of_b_c_violations_at_start).toLocaleString("en-US") : "",
+      ),
+    ],
+  });
+};
+
+const heatSensorRecord = (r: Row): LegalRecord =>
+  programRecord(r, { what: "Required to install heat sensors after heat violations and complaints", from: "Heat Sensor Program (HPD)", started: r.program_start_date });
+
+/** The yes/no columns of the Certification of No Harassment pilot list: what put the building on it, in its dictionary's words made plain. */
+const HARASSMENT_LIST_REASONS: [string, string][] = [
+  ["bqi", "Distress score over the city's threshold (Building Qualification Index)"],
+  ["aep_order", "Discharged from the Alternative Enforcement Program"],
+  ["discharged_7a", "Discharged from a court-appointed administrator (7A)"],
+  ["hpd_vacate_order", "Vacate order from the housing department"],
+  ["dob_vacate_order", "Vacate order from the buildings department"],
+  ["harassment_finding", "Finding of tenant harassment by a court or the state"],
+];
+
+/**
+ * A building on the pilot list can't get permits for demolition or major alterations until the
+ * landlord shows the city that tenants were not harassed. It is on the list (open) while it has a row.
+ */
+function harassmentListRecord(r: Row): LegalRecord {
+  const added = day(r.date_added);
+  return {
+    kind: "program",
+    what: "Landlord must show no tenant harassment before major construction permits",
+    where: "Building",
+    date: added,
+    status: "open",
+    closedAt: null,
+    facts: [
+      ["Status", "On the list"],
+      ...fact("Added", added),
+      ...HARASSMENT_LIST_REASONS.flatMap(([column, label]) => fact(label, r[column]?.trim() ? sentenceCase(r[column]!) : "")),
+      ["From", "Certification of No Harassment pilot building list (HPD)"],
+    ],
+    area: "building",
+  };
+}
+
+/**
  * Every housing court case, vacate order and eviction as its own record with every field the city
  * publishes, newest first. Cases are all of them, up to LEGAL_LIMITS.cases; evictions are
- * residential ones from the last three years (the query's window).
+ * residential ones from the last three years (the query's window). City programs are every stint in
+ * the two enforcement programs and the building's place on the harassment list.
  */
 export function computeLegal(raw: RawBuildingData): LegalHistory {
-  const items = [...raw.litigations.map(caseRecord), ...raw.vacate.map(vacateRecord), ...raw.evictions.map(evictionRecord)];
+  const items = [
+    ...raw.litigations.map(caseRecord),
+    ...raw.vacate.map(vacateRecord),
+    ...raw.evictions.map(evictionRecord),
+    ...raw.aep.map(aepRecord),
+    ...raw.heatSensors.map(heatSensorRecord),
+    ...raw.harassmentList.map(harassmentListRecord),
+  ];
   items.sort((a, b) => (a.date === b.date ? 0 : a.date === null ? 1 : b.date === null ? -1 : a.date < b.date ? 1 : -1));
   const unavailable: LegalKind[] = [];
   if (raw.failed.includes("litigations")) unavailable.push("case");
   if (raw.failed.includes("vacate")) unavailable.push("vacate");
   if (raw.failed.includes("evictions")) unavailable.push("eviction");
+  if (["aep", "heatSensors", "harassmentList"].some((k) => raw.failed.includes(k))) unavailable.push("program");
   return {
     items,
     truncated: { cases: raw.litigations.length >= LEGAL_LIMITS.cases, evictions: raw.evictions.length >= LEGAL_LIMITS.evictions },
     unavailable,
   };
+}
+
+// ---------- property records: last sale, newest mortgage, tax lien sale list ----------
+
+/** A deed for this much or less is a transfer for a token sum ("ten dollars and other consideration"), not a sale. */
+const NOMINAL_PRICE = 100;
+
+/**
+ * What ACRIS and the tax lien sale lists say about the lot. A part whose records didn't load is left
+ * out. The sale is the newest deed with a real price; when a newer deed names none (a transfer to an
+ * heir or to the owner's own company), that is noted beside it. A condo building gets no sale or
+ * mortgage: its deeds are on each apartment's lot. A deed that covers several lots gives one price
+ * for all of them, which can't be told apart here.
+ */
+export function computeProperty(raw: RawBuildingData, bbl: string): PropertyRecords {
+  const out: PropertyRecords = {};
+  const today = raw.fetchedAt.slice(0, 10);
+  if (!raw.failed.includes("acrisDocs") && !isCondoBillingLot(bbl)) {
+    // The date on the document, or when it was recorded if that is missing or impossible.
+    const when = (r: Row) => {
+      const d = day(r.document_date);
+      return d && d >= "1900" && d <= today ? d : day(r.recorded_datetime);
+    };
+    const docs = raw.acrisDocs
+      .map((r) => ({ type: upper(r.doc_type), date: when(r), amount: num(r.document_amt), share: num(r.percent_trans) }))
+      .sort((a, b) => (a.date === b.date ? 0 : a.date === null ? 1 : b.date === null ? -1 : a.date < b.date ? 1 : -1));
+    const deeds = docs.filter((d) => (DEED_TYPES as readonly string[]).includes(d.type));
+    const sold = deeds.find((d) => d.amount > NOMINAL_PRICE);
+    const newest = deeds[0];
+    out.sale = !newest
+      ? null
+      : !sold
+        ? { date: newest.date, price: null }
+        : { date: sold.date, price: sold.amount, ...(sold.share > 0 && sold.share < 100 ? { share: sold.share } : {}), ...(newest !== sold && newest.date ? { transferred: newest.date } : {}) };
+    const mortgage = docs.find((d) => (MORTGAGE_TYPES as readonly string[]).includes(d.type));
+    out.mortgage = mortgage ? { date: mortgage.date, amount: mortgage.amount > 0 ? mortgage.amount : null } : null;
+  }
+  if (!raw.failed.includes("taxLiens")) {
+    const listing = [...raw.taxLiens].filter((r) => r.month).sort((a, b) => (a.month! < b.month! ? 1 : -1))[0];
+    out.taxLien = listing ? { month: day(listing.month)!, stage: tidy(listing.cycle), waterOnly: /^Y/i.test((listing.water_debt_only ?? "").trim()) } : null;
+  }
+  return out;
+}
+
+// ---------- building facts from the other building records ----------
+
+const FACADE_STATUS: Record<string, string> = { SAFE: "Safe", SWARMP: "Safe with repairs needed", UNSAFE: "Unsafe", "NO REPORT FILED": "No report filed" };
+
+/**
+ * The newest facade inspection cycle on file. `current_status` is the cycle's standing and is the
+ * same on each of its rows; a cycle whose first report is still under review has only that report's
+ * own status. A building with no report gets a row the city generates, saying so.
+ */
+function facadeOf(rows: Row[]): FacadeFiling | null {
+  const cycle = Math.max(0, ...rows.map((r) => num(r.cycle)));
+  if (!cycle) return null;
+  const inCycle = rows.filter((r) => num(r.cycle) === cycle);
+  const filed = inCycle.map((r) => r.filing_date).filter((d): d is string => !!d).sort().pop();
+  const newestFiling = inCycle.find((r) => r.filing_date === filed);
+  const status = upper(inCycle.find((r) => r.current_status?.trim())?.current_status ?? newestFiling?.filing_status ?? inCycle[0]?.filing_status);
+  if (!status) return null;
+  return { status: FACADE_STATUS[status] ?? sentenceCase(status), cycle, filed: status === "NO REPORT FILED" ? null : day(filed) };
+}
+
+/** How long before the newest inspection a boiler's own newest one can be and still count: one last inspected earlier than that has likely been replaced. */
+const BOILER_STALE_DAYS = 730;
+
+/**
+ * The newest accepted filing of each boiler. Rows come newest filing first, so a later filing that
+ * corrects an inspection's defects is read before the inspection it corrects.
+ */
+function boilerOf(rows: Row[]): BoilerInspection | null {
+  const latest = new Map<string, { date: string; defects: boolean }>();
+  for (const r of rows) {
+    const date = dayFromUs((r.inspection_date ?? "").trim().split(" ")[0]);
+    if (!date) continue;
+    const id = r.boiler_id ?? "";
+    const seen = latest.get(id);
+    if (!seen || date > seen.date) latest.set(id, { date, defects: upper(r.defects_exist) === "YES" });
+  }
+  const inspected = [...latest.values()].map((b) => b.date).sort().pop();
+  if (!inspected) return null;
+  const inUse = [...latest.values()].filter((b) => daysBetween(b.date, new Date(inspected)) <= BOILER_STALE_DAYS);
+  return { inspected, boilers: inUse.length, withDefects: inUse.filter((b) => b.defects).length };
+}
+
+/**
+ * The tiles read from the building's other records: facade and boiler filings, the certificate of
+ * occupancy, permits, asbestos projects and tax exemptions. One whose query failed is left out. The
+ * permit, asbestos and exemption ones are null when there is nothing, and their tiles then don't
+ * show: none of the three datasets is complete enough for "none" to be a fact.
+ */
+function coverRecords(raw: RawBuildingData): Partial<Cover> {
+  const ok = (key: string) => !raw.failed.includes(key);
+  const now = new Date(raw.fetchedAt);
+  const today = raw.fetchedAt.slice(0, 10);
+  const out: Partial<Cover> = {};
+  if (ok("facades")) out.facade = facadeOf(raw.facades);
+  if (ok("boilers")) out.boiler = boilerOf(raw.boilers);
+  if (ok("certificates")) {
+    // One certificate in the data is dated 2105.
+    const c = raw.certificates.find((r) => (day(r.c_o_issue_date) ?? "9") <= today && numOrNull(r.pr_dwelling_unit) != null);
+    out.legalUnits = c ? { units: num(c.pr_dwelling_unit), date: day(c.c_o_issue_date)!, temporary: /temp/i.test(c.issue_type ?? "") } : null;
+  }
+  if (ok("permits")) {
+    const types = raw.permits.filter((r) => num(r.permits) > 0);
+    out.permits12mo = types.length ? { count: types.reduce((s, r) => s + num(r.permits), 0), types: types.map((r) => tidy(r.work_type)).filter(Boolean) } : null;
+  }
+  if (ok("asbestos")) {
+    const projects = new Map<string, Row>();
+    for (const r of raw.asbestos) if (r.tru && !projects.has(r.tru)) projects.set(r.tru, r);
+    // A few projects have start dates centuries away; the latest is the newest that starts within a year.
+    const horizon = `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`;
+    const latest = [...projects.values()].find((r) => (day(r.start_date) ?? "9") <= horizon);
+    out.asbestos = projects.size ? { filings: projects.size, latestStart: day(latest?.start_date), latestStatus: latest?.status_description?.trim() ? sentenceCase(latest.status_description) : null } : null;
+  }
+  if (ok("exemptions")) {
+    // The city's tax year runs July to June and is named for the year it ends in. Only an exemption
+    // on this year's roll counts: one from an earlier year may have run out.
+    const taxYear = now.getUTCFullYear() + (now.getUTCMonth() >= 6 ? 1 : 0);
+    const row = raw.exemptions.find((r) => num(r.year) === taxYear);
+    out.taxBreak = row ? { program: (row.exmp_code ?? "").trim() === J51_CODE ? "J-51" : "421-a", taxYear } : null;
+  }
+  return out;
 }
 
 // ---------- cover, links, teaser, report ----------
@@ -1300,6 +1696,9 @@ export function computeCover(raw: RawBuildingData): Report["cover"] {
     condo: num(p?.condono) > 0,
     housingProgram: housingProgram(programCode),
     housingProgramCode: programCode,
+    // PLUTO sets a flag to 1 when any part of the lot is in that map's 1%-a-year floodplain, and leaves it empty otherwise.
+    ...(raw.failed.includes("pluto") ? {} : { floodZone: p ? { firm2007: num(p.firm07_flag) === 1, prelim2015: num(p.pfirm15_flag) === 1 } : null }),
+    ...coverRecords(raw),
   };
 }
 
@@ -1323,7 +1722,7 @@ export function computeLinks(address: Address, hpdBuildingId: string | null): Li
 }
 
 export function computeReport(input: ComputeInput): Report {
-  const { id, raw, now, sources } = input;
+  const { id, raw, now } = input;
   const hpdBuildingId = raw.jurisdiction[0]?.buildingid ?? raw.registration[0]?.buildingid ?? raw.hpdOpenItems[0]?.buildingid ?? null;
   const address: Address = { ...input.address, hpdBuildingId };
   const cover = computeCover(raw);
@@ -1358,8 +1757,9 @@ export function computeReport(input: ComputeInput): Report {
     complaints,
     violations,
     legal,
+    property: computeProperty(raw, address.bbl),
     links: computeLinks(address, hpdBuildingId),
-    sources,
+    sources: [],
   };
 }
 

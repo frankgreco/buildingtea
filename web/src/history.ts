@@ -1,6 +1,7 @@
 // The three history sections of the full report, in page order: "Complaints" (every complaint),
-// "Violations" (every violation and summons, open and closed) and "Legal" (every housing court case,
-// vacate order and eviction). All are built the same way: a title with two icon buttons that choose the view, a legend
+// "Violations" (every violation and summons, open and closed, with the failed rat inspections and
+// the city's emergency repairs) and "Legal" (every housing court case, vacate order, eviction and
+// city program). All are built the same way: a title with two icon buttons that choose the view, a legend
 // that is also the filter, a stacked bar chart of the last twelve months, and the records as a list
 // or grouped by place. Every record is a row that opens in place to show every field the city
 // publishes. The chart library loads with a dynamic import() the first time one of these sections
@@ -80,6 +81,7 @@ const SERIES_VAR: Record<SeriesKey, string> = {
   case: "--series-1",
   vacate: "--series-2",
   eviction: "--series-7",
+  program: "--series-3",
 };
 
 /** The light scheme from styles.css. Fallbacks when a property can't be read, and the colours charts print in. */
@@ -215,12 +217,22 @@ function placePills(where: string | undefined, split: RegExp, area: RecordArea |
 // ---------- Violations ----------
 
 const KIND_NAME = Object.fromEntries(M.VIOLATION_KINDS.map((s) => [s.key, s.name])) as Record<ViolationRecord["kind"], string>;
-const SOURCE_NAME: Record<ViolationRecord["source"], string> = { housing: "housing violations", buildings: "buildings-department violations", summons: "city summonses" };
+const SOURCE_NAME: Record<ViolationRecord["source"], string> = {
+  housing: "housing violations",
+  buildings: "buildings-department violations",
+  summons: "city summonses",
+  rats: "rat inspections",
+  repairs: "city emergency repairs",
+};
 const SOURCE_LABEL: Record<ViolationRecord["source"], string> = {
   housing: "Housing department (HPD) violation",
   buildings: "Buildings department (DOB) violation",
   summons: "City summons (DOB, heard at OATH)",
+  rats: "Health department (DOHMH) rat inspection",
+  repairs: "Housing department (HPD) emergency repair order",
 };
+/** What a record's date is the date of. Anything else was issued. */
+const DATE_LABEL: Partial<Record<ViolationRecord["source"], string>> = { housing: "Inspected", rats: "Inspected", repairs: "Ordered" };
 
 function violationRow(v: ViolationRecord, now: Date, view: M.ViewMode): string {
   const open = v.status === "open";
@@ -228,8 +240,9 @@ function violationRow(v: ViolationRecord, now: Date, view: M.ViewMode): string {
     ["Status", open ? "Open" : "Closed"],
     ["City's status", v.cityStatus],
     ["Hearing outcome", v.source === "summons" && v.hearing ? v.hearing : ""],
-    [v.source === "housing" ? "Inspected" : "Issued", M.fullDate(v.date) || "No date on file"],
-    ["Closed", M.fullDate(v.closedAt)],
+    [DATE_LABEL[v.source] ?? "Issued", M.fullDate(v.date) || "No date on file"],
+    // A failed rat inspection closes when the lot passes a later one.
+    [v.source === "rats" ? "Passed a later inspection" : "Closed", M.fullDate(v.closedAt)],
     ["Notice issued", M.fullDate(v.noticeDate)],
     ["Type", KIND_NAME[M.kindOf(v)]],
     ["From", SOURCE_LABEL[v.source] ?? String(v.source)],
@@ -249,6 +262,8 @@ function violationNotes(h: ViolationHistory): string {
   if (t.housing) cut.push(`housing violations show ${n(listed("housing"))} of ${n(h.totals?.housing ?? listed("housing"))} on record, open ones first, then the newest`);
   if (t.buildings) cut.push("only the newest buildings-department violations are listed");
   if (t.summons) cut.push(`city summonses show the newest ${n(listed("summons"))}, active ones first`);
+  if (t.rats) cut.push("only the newest failed rat inspections are listed");
+  if (t.repairs) cut.push("only the newest city emergency repairs are listed");
   const lines: string[] = [];
   if (cut.length) lines.push(`Not everything fits: ${cut.join("; ")}.`);
   const missing = (Array.isArray(h.unavailable) ? h.unavailable : []).map((s) => SOURCE_NAME[s]).filter(Boolean);
@@ -264,9 +279,9 @@ const violationsHtml = (h: ViolationHistory) =>
     noun: "violations",
     filterLabel: "Show violations that are",
     series: STATUS_SERIES,
-    chartOf: "Violations and summonses",
+    chartOf: "Violations, summonses, failed rat inspections and city emergency repairs",
     count: h.items.length,
-    empty: "No violations or summonses on file.",
+    empty: "No violations, summonses, failed rat inspections or city emergency repairs on file.",
     notes: violationNotes(h),
   });
 
@@ -316,13 +331,13 @@ const complaintsHtml = (items: Complaint[], truncated: boolean) =>
 
 // ---------- Legal ----------
 
-const LEGAL_NAME: Record<LegalRecord["kind"], string> = { case: "housing court cases", vacate: "vacate orders", eviction: "evictions" };
+const LEGAL_NAME: Record<LegalRecord["kind"], string> = { case: "housing court cases", vacate: "vacate orders", eviction: "evictions", program: "city program records" };
 
 function legalRow(r: LegalRecord, now: Date, view: M.ViewMode): string {
   const facts = factPairs(r.facts);
   return recHtml({
     open: r.status === "open",
-    // "Pending", "Still in effect", "Lifted"; an eviction has no status to say.
+    // "Pending", "Still in effect", "Lifted", "Discharged"; an eviction has no status to say.
     state: facts.find(([k]) => k === "Status")?.[1] ?? "",
     key: r.kind,
     what: esc(r.name || r.what),
@@ -349,9 +364,9 @@ const legalHtml = (h: LegalHistory) =>
     noun: "legal records",
     filterLabel: "Show",
     series: LEGAL_SERIES,
-    chartOf: "Housing court cases, vacate orders and evictions",
+    chartOf: "Housing court cases, vacate orders, evictions and city programs",
     count: h.items.length,
-    empty: "No court cases, vacate orders or evictions on file.",
+    empty: "No court cases, vacate orders, evictions or city programs on file.",
     notes: legalNotes(h),
   });
 

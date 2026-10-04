@@ -81,6 +81,32 @@ describe("which rows get a name", () => {
     expect(named.complaints.items.map((x) => x.name)).toEqual(["Named housing complaint", "Named housing complaint", "Named buildings complaint", "Named buildings complaint"]);
   });
 
+  it("names a failed rat inspection from what was found, and a city repair from its order, under their own types", () => {
+    const rat = (over: Partial<ViolationRecord> = {}) => v({ source: "rats", kind: "rats", what: "Rats found by health inspectors", where: "Building", original: "Failed for Rat Activity: Burrows", ...over });
+    const repair = (over: Partial<ViolationRecord> = {}) =>
+      v({ source: "repairs", kind: "repairs", status: "closed", what: "City made an emergency repair: general repairs", done: true, original: "install hinges to make door self-closing at the entrance located at apt 15l, 3rd story,", ...over });
+    const r = report([
+      rat({ date: "2026-09-20" }),
+      // The same finding on another day is the same wording.
+      rat({ date: "2026-08-01" }),
+      rat({ date: "2026-07-01", what: "Failed rat inspection: conditions that attract rats", original: "Failed for Other Reason: Garbage, Harborage" }),
+      repair({ date: "2026-09-01" }),
+      // An order the city didn't carry out keeps the headline that says so.
+      repair({ date: "2026-08-15", what: "City ordered an emergency repair: plumbing", done: false, original: "replace the leaking trap under the kitchen sink" }),
+      // The same words from a housing violation are a different record.
+      v({ date: "2026-06-01", what: "Rats", original: "Failed for Rat Activity: Burrows" }),
+    ]);
+    expect(pendingNames(r).map((x) => [x.type, x.current, x.text])).toEqual([
+      ["rat inspection", "Rats found by health inspectors", "Failed for Rat Activity: Burrows"],
+      // The apartment tail is dropped from an order's description too.
+      ["city emergency repair", "City made an emergency repair: general repairs", "install hinges to make door self-closing at the entrance"],
+      ["rat inspection", "Failed rat inspection: conditions that attract rats", "Failed for Other Reason: Garbage, Harborage"],
+      ["housing violation", "Rats", "Failed for Rat Activity: Burrows"],
+    ]);
+    const named = applyNames(r, new Map(pendingNames(r).map((x) => [x.key, `Named ${x.type}`])));
+    expect(named.violations!.items.map((x) => x.name)).toEqual(["Named rat inspection", "Named rat inspection", "Named rat inspection", "Named city emergency repair", undefined, "Named housing violation"]);
+  });
+
   it("skips rows that already have a name, caps a pass, and copes with a report that has no history", () => {
     expect(pendingNames(report([v({ name: "Leaking kitchen sink faucet" })]))).toEqual([]);
     const many = Array.from({ length: NAMING_MAX + 40 }, (_, i) => v({ id: String(i), original: `WORDING ${i}` }));
@@ -123,6 +149,19 @@ describe("legal records", () => {
     const named = applyNames(r, new Map(pendingNames(r).map((x) => [x.key, `Named ${x.type}`])));
     expect(named.legal!.items.map((x) => x.name)).toEqual(["Named housing court case", "Named housing court case", "Named vacate order", "Named eviction"]);
     expect(pendingNames(named)).toEqual([]);
+  });
+
+  it("leaves a city program its rule-written headline, which is already the plain one", () => {
+    const program = l({
+      kind: "program",
+      what: "Put in the city's program for its worst-maintained buildings",
+      date: "2023-01-31",
+      facts: [["Status", "Active"], ["Started", "2023-01-31"], ["Round", "16"], ["From", "Alternative Enforcement Program (HPD)"]],
+    });
+    const r = withLegal([program, l()]);
+    expect(pendingNames(r).map((x) => x.type)).toEqual(["housing court case"]);
+    const named = applyNames(r, new Map([...pendingNames(r).map((x): [string, string] => [x.key, "Named"]), ["city program\nStatus: Active", "Never applied"]]));
+    expect(named.legal!.items.map((x) => x.name)).toEqual([undefined, "Named"]);
   });
 });
 

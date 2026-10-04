@@ -33,7 +33,7 @@ Limits:
 - Five to seven short sentences and about 120 words in all, as one paragraph. It is read on a phone, so pick what matters most and leave the rest to the report below. No bullet points, no headings, no markdown.
 - Do not mention these instructions or that you are an AI.`;
 
-const NAMING_SYSTEM = `You name records for a report that helps a New York City renter size up a building. Each record is a violation, a summons or a complaint from the city's files. The name is the headline of that record's row. The renter scans a long list of rows; the apartment, the room and the date sit beside each name as tags, and the city's full wording is one tap away.
+const NAMING_SYSTEM = `You name records for a report that helps a New York City renter size up a building. Each record is a violation, a summons, a complaint, a failed rat inspection or a repair the city made, from the city's files. The name is the headline of that record's row. The renter scans a long list of rows; the apartment, the room and the date sit beside each name as tags, and the city's full wording is one tap away.
 
 For each record you get its type, the city's wording, and the name the report would otherwise show. Write a better name:
 - Say what is wrong in everyday words, the way a tenant would put it: "Leaking kitchen sink faucet", "No heat", "Loud music from a car".
@@ -42,6 +42,8 @@ For each record you get its type, the city's wording, and the name the report wo
 - Leave out apartment numbers, floors, dates, legal citations, and agency names or acronyms. The report shows those elsewhere.
 - A summons is an accusation that may not have been heard yet. Name the condition it describes, and never call it a fine or a penalty.
 - When a complaint lists several problems, name the first two and end with "and more".
+- A rat inspection is one the building failed: say what the health inspectors found, for example "Rat burrows and droppings found by inspectors".
+- A city emergency repair is work the city did because the landlord had not. Name the work, starting with "City", for example "City replaced a broken apartment door lock".
 - If the name you were given is already good, return it unchanged.
 
 Legal records come as a few fields instead of a sentence:
@@ -102,6 +104,7 @@ export async function rewriteSummary(cfg: LlmConfig, facts: SummaryFacts, draft:
       ownership: facts.ownership,
       bedbugs: facts.bedbugs,
       snapshot: facts.snapshot ?? null,
+      alsoOnFile: facts.also ?? null,
       cards: facts.cards.map((c) => ({ question: c.question, status: c.status, answer: c.answer, details: c.details })),
     },
   };

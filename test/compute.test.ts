@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Address, Card } from "../shared/types";
-import { computeComplaints, computeLegal, computeReport, computeViolations, teaserOf } from "../src/lib/compute";
+import { snapshotOf } from "../shared/snapshot";
+import { computeComplaints, computeLegal, computeProperty, computeReport, computeViolations, teaserOf } from "../src/lib/compute";
 import {
+  ACRIS_DOCS,
   ACTIVE_LIMITS,
   deriveDobNowActive,
   deriveEcbActive,
@@ -10,7 +12,9 @@ import {
   ECB_ACTIVE_COLUMNS,
   fetchBuildingData,
   HPD_OPEN_COLUMNS,
+  isCondoBillingLot,
   LEGAL_LIMITS,
+  RAT_VISITS,
   VIOLATION_LIMITS,
   type RawBuildingData,
 } from "../src/lib/datasets";
@@ -68,12 +72,26 @@ function raw(over: Partial<RawBuildingData> = {}): RawBuildingData {
     litigations: [],
     vacate: [],
     evictions: [],
+    ratInspections: [],
+    repairOrders: [],
+    handymanOrders: [],
+    aep: [],
+    heatSensors: [],
+    harassmentList: [],
+    acrisDocs: [],
+    taxLiens: [],
+    facades: [],
+    boilers: [],
+    certificates: [],
+    permits: [],
+    asbestos: [],
+    exemptions: [],
     failed: [],
     ...over,
   };
 }
 
-const build = (over: Partial<RawBuildingData> = {}) => computeReport({ id: "testid123456", address: ADDRESS, raw: raw(over), sources: [], now: NOW });
+const build = (over: Partial<RawBuildingData> = {}) => computeReport({ id: "testid123456", address: ADDRESS, raw: raw(over), now: NOW });
 const card = (r: ReturnType<typeof build>, key: string) => r.cards.find((c) => c.key === key)!;
 const tableOf = (c: Card, title: string) => c.tables?.find((t) => t.title === title);
 
@@ -1006,7 +1024,7 @@ describe("open and active lists derived from the all-status queries", () => {
     });
   }
 
-  it("asks for every status in one query each, open first, and derives the old lists from them (29 requests)", async () => {
+  it("asks for every status in one query each, open first, and derives the old lists from them (44 requests)", async () => {
     const urls: string[] = [];
     const hpdRows = [
       { violationid: "1", class: "B", inspectiondate: "2026-09-12T00:00:00.000", violationstatus: "Open", currentstatus: "NOV SENT OUT", novdescription: "LOCK", ordernumber: "501" },
@@ -1028,10 +1046,12 @@ describe("open and active lists derived from the all-status queries", () => {
       if (url.includes("/855j-jady.json")) return Response.json(nowRows);
       if (url.includes("/6bgk-3dad.json")) return Response.json(ecbRows);
       if (url.includes("/tesw-yqqr.json")) return Response.json([{ registrationid: "209634" }]);
+      if (url.includes("/8h5j-fqxa.json")) return Response.json([{ document_id: "2017062700295001" }]);
       return Response.json([]);
     }) as typeof fetch;
     const raw = await fetchBuildingData("2003068", "2025050046", NOW, { fetcher });
-    expect(urls).toHaveLength(29);
+    // 42 side by side, then the registration's contacts and the lot's documents: the most a build makes.
+    expect(urls).toHaveLength(44);
 
     const hpd = urls.filter((u) => u.includes("/wvxf-dwi5.json")).map((u) => new URL(u).searchParams);
     const rows = hpd.find((q) => q.get("$limit") === String(VIOLATION_LIMITS.hpd))!;
@@ -1148,7 +1168,7 @@ describe("violation history", () => {
     expect(["VIO-1", "V041624CLL0404SB", "39205015P"].map((id) => by(id).area)).toEqual(["building", "building", "building"]);
     // Newest first across all three sources.
     expect(h.items.map((v) => v.date)).toEqual([...h.items.map((v) => v.date)].sort().reverse());
-    expect(h.totals).toEqual({ housing: 5, buildings: 4, summons: 2 });
+    expect(h.totals).toEqual({ housing: 5, buildings: 4, summons: 2, rats: 0, repairs: 0 });
     expect(h.unavailable).toEqual([]);
   });
 
@@ -1198,7 +1218,7 @@ describe("violation history", () => {
   it("flags each source that returned exactly its row limit", () => {
     const many = (n: number, f: (i: number) => Row) => Array.from({ length: n }, (_, i) => f(i));
     const none = computeViolations(raw({ hpdViolationRows: many(VIOLATION_LIMITS.hpd - 1, (i) => hpd(String(i))), hpdTotal: [{ n: "4849" }] }));
-    expect(none.truncated).toEqual({ housing: false, buildings: false, summons: false });
+    expect(none.truncated).toEqual({ housing: false, buildings: false, summons: false, rats: false, repairs: false });
     const all = computeViolations(
       raw({
         hpdViolationRows: many(VIOLATION_LIMITS.hpd, (i) => hpd(String(i))),
@@ -1207,8 +1227,8 @@ describe("violation history", () => {
         ecbRows: many(VIOLATION_LIMITS.ecb, (i) => ecb(String(i))),
       }),
     );
-    expect(all.truncated).toEqual({ housing: true, buildings: true, summons: true });
-    expect(all.totals).toEqual({ housing: 4849, buildings: VIOLATION_LIMITS.bis, summons: VIOLATION_LIMITS.ecb });
+    expect(all.truncated).toEqual({ housing: true, buildings: true, summons: true, rats: false, repairs: false });
+    expect(all.totals).toEqual({ housing: 4849, buildings: VIOLATION_LIMITS.bis, summons: VIOLATION_LIMITS.ecb, rats: 0, repairs: 0 });
     expect(computeViolations(raw({ dobNowRows: many(VIOLATION_LIMITS.dobNow, (i) => ({ violation_number: String(i), violation_status: "Dismissed" })) })).truncated.buildings).toBe(true);
   });
 
@@ -1297,5 +1317,586 @@ describe("complaint topics", () => {
     const heat = card(build({ hpdComplaints12mo: [{ major_category: "HEAT/HOT WATER", complaints: "9", problems: "12" }] }), "heat");
     expect(heat.status).toBe("serious");
     expect(heat.answer).toMatch(/^9 heat or hot water complaints/);
+  });
+});
+
+// ---------- the newer records: rat inspections, city repairs, city programs, property records, building facts ----------
+
+describe("the request budget", () => {
+  const run = async (bin: string, bbl: string, answer: (url: string) => unknown = () => []) => {
+    const urls: string[] = [];
+    const fetcher = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      const body = answer(String(input));
+      return body instanceof Response ? body : Response.json(body);
+    }) as typeof fetch;
+    const raw = await fetchBuildingData(bin, bbl, NOW, { fetcher });
+    return { urls, raw, q: (id: string) => urls.filter((u) => u.includes(`/${id}.json`)).map((u) => new URL(u).searchParams) };
+  };
+  const NEW = ["p937-wjvj", "mdbu-nrqn", "sbnd-xujn", "hcir-3275", "h4mf-f24e", "bzxi-2tsw", "8h5j-fqxa", "9rz4-mjek", "xubg-57si", "52dp-yji6", "bs8b-p36w", "rbx6-tga4", "vq35-j9qm", "muvi-b6kx"];
+
+  it("makes 42 requests side by side, and each of the two that follow only when it has an id to ask about", async () => {
+    const bare = await run("3037516", "3013950033");
+    expect(bare.urls).toHaveLength(42);
+    for (const id of NEW) expect(bare.q(id)).toHaveLength(1);
+    expect(bare.raw.acrisDocs).toEqual([]);
+    expect(bare.raw.failed).toEqual([]);
+
+    const full = await run("3037516", "3013950033", (u) =>
+      u.includes("/tesw-yqqr.json") ? [{ registrationid: "1" }] : u.includes("/8h5j-fqxa.json") ? [{ document_id: "2017062700295001" }, { document_id: "FT_2900005131590" }] : u.includes("/bnx9-e6tj.json") ? [{ doc_type: "DEED" }] : [],
+    );
+    expect(full.urls).toHaveLength(44);
+    // Under the 50 subrequests one invocation gets, with the one or two the address lookup makes.
+    expect(full.urls.length + 2).toBeLessThanOrEqual(50);
+    // The second hop asks only about the lot's own documents, and only for deeds and mortgages.
+    const docs = full.q("bnx9-e6tj")[0]!;
+    expect(docs.get("$where")).toBe("document_id in ('2017062700295001','FT_2900005131590') AND doc_type in ('DEED','DEEDO','DEEDP','DEED, LE','DEED, RC','IDED','REIT','MTGE','M&CON','CMTG')");
+    expect(full.raw.acrisDocs).toEqual([{ doc_type: "DEED" }]);
+    expect(full.raw).not.toHaveProperty("acrisLegals");
+  });
+
+  it("keys each new query the way its dataset is keyed", async () => {
+    const { q } = await run("3037516", "3013950033");
+    const lot = (id: string) => [q(id)[0]!.get("borough"), q(id)[0]!.get("block"), q(id)[0]!.get("lot")];
+    expect(q("p937-wjvj")[0]!.get("bbl")).toBe("3013950033");
+    expect(q("p937-wjvj")[0]!.get("$limit")).toBe(String(RAT_VISITS));
+    for (const id of ["mdbu-nrqn", "sbnd-xujn", "hcir-3275", "h4mf-f24e", "bzxi-2tsw", "xubg-57si", "rbx6-tga4", "vq35-j9qm"]) expect(q(id)[0]!.get("bin")).toBe("3037516");
+    expect([q("mdbu-nrqn")[0]!.get("$limit"), q("sbnd-xujn")[0]!.get("$limit")]).toEqual([String(VIOLATION_LIMITS.repairs), String(VIOLATION_LIMITS.repairs)]);
+    expect([q("52dp-yji6")[0]!.get("bin_number"), q("bs8b-p36w")[0]!.get("bin_number")]).toEqual(["3037516", "3037516"]);
+    expect(lot("8h5j-fqxa")).toEqual(["3", "1395", "33"]);
+    expect(q("8h5j-fqxa")[0]!.get("$limit")).toBe(String(ACRIS_DOCS));
+    expect(lot("9rz4-mjek")).toEqual(["3", "1395", "33"]);
+    expect(q("muvi-b6kx")[0]!.get("parid")).toBe("3013950033");
+    expect(q("muvi-b6kx")[0]!.get("$where")).toBe("status like 'A%' AND curexmptot > 0 AND exmp_code in ('1920','5110','5113','5114','5116','5117','5118','5119','5120','5121','5122','5123')");
+    expect(q("rbx6-tga4")[0]!.get("$where")).toMatch(/^issued_date > '2025-10-0\d'$/);
+    // The flood flags ride on the PLUTO request the report already made.
+    expect(q("64uk-42ks")).toHaveLength(1);
+    expect(q("64uk-42ks")[0]!.get("$select")?.split(",")).toEqual(expect.arrayContaining(["firm07_flag", "pfirm15_flag"]));
+  });
+
+  it("asks ACRIS nothing about a condo building's billing lot", async () => {
+    expect([isCondoBillingLot("1012237503"), isCondoBillingLot("1012237500"), isCondoBillingLot("3013950033")]).toEqual([true, false, false]);
+    const condo = await run("1032526", "1012237503", (u) => (u.includes("/8h5j-fqxa.json") ? [{ document_id: "x" }] : []));
+    expect(condo.urls).toHaveLength(41);
+    expect(condo.q("8h5j-fqxa")).toHaveLength(0);
+    expect(condo.raw.acrisDocs).toEqual([]);
+    expect(condo.raw.failed).toEqual([]);
+  });
+
+  it("fails the documents when either ACRIS request fails, and nothing else", async () => {
+    const first = await run("3037516", "3013950033", (u) => (u.includes("/8h5j-fqxa.json") ? new Response("slow", { status: 500 }) : []));
+    expect(first.raw.failed).toEqual(["acrisLegals", "acrisDocs"]);
+    const second = await run("3037516", "3013950033", (u) => (u.includes("/8h5j-fqxa.json") ? [{ document_id: "a" }] : u.includes("/bnx9-e6tj.json") ? new Response("slow", { status: 500 }) : []));
+    expect(second.raw.failed).toEqual(["acrisDocs"]);
+    expect(computeProperty(second.raw, "3013950033")).toEqual({ taxLien: null });
+  });
+});
+
+describe("failed rat inspections", () => {
+  /** p937-wjvj rows as the query selects them; the values are 1018 Eastern Parkway's (2026-10-03). */
+  const visit = (date: string, result: string, over: Row = {}): Row => ({
+    job_id: `PC${date.replace(/-/g, "")}`,
+    inspection_date: `${date}T10:40:10.000`,
+    inspection_type: "Initial",
+    result,
+    house_number: "1018",
+    street_name: "EASTERN PARKWAY",
+    ...over,
+  });
+  const VISITS: Row[] = [
+    visit("2026-02-27", "Passed"),
+    visit("2020-02-27", "Failed for Rat Activity", { job_id: "PC7578066", letter_type: "COTA", observations: "Burrows" }),
+    visit("2019-12-26", "Passed"),
+    visit("2019-12-19", "Bait applied", { inspection_type: "Treatments" }),
+    visit("2019-10-22", "Failed for Rat Activity", { inspection_type: "Compliance", observations: "Burrows" }),
+    visit("2019-06-25", "Failed for Other Reason", { letter_type: "COTA", observations: "Harborage" }),
+    visit("2018-12-28", "Failed for Rat Activity and Other Reason", { letter_type: "Summons Issued", observations: "Droppings, Burrows, Harborage" }),
+    visit("2014-04-25", "Monitoring visit", { inspection_type: "Treatments" }),
+    visit("2012-05-01", "Bait applied", { inspection_type: "Treatments" }),
+  ];
+  const rats = (rows: Row[], over: Partial<RawBuildingData> = {}) => computeViolations(raw({ ratInspections: rows, ...over })).items.filter((v) => v.source === "rats");
+
+  it("makes a row of each failed inspection and of nothing else", () => {
+    const rows = rats(VISITS);
+    expect(rows.map((v) => [v.date, v.what, v.cityStatus])).toEqual([
+      ["2020-02-27", "Rats found by health inspectors", "Failed for Rat Activity"],
+      ["2019-10-22", "Rats found by health inspectors", "Failed for Rat Activity"],
+      ["2019-06-25", "Failed rat inspection: conditions that attract rats", "Failed for Other Reason"],
+      ["2018-12-28", "Rats found by health inspectors, and conditions that attract them", "Failed for Rat Activity and Other Reason"],
+    ]);
+    expect(rows[0]).toMatchObject({ source: "rats", kind: "rats", id: "PC7578066", ref: "Rat inspection job PC7578066", where: "Building", area: "building", original: "Failed for Rat Activity: Burrows" });
+    expect(rows[0]).not.toHaveProperty("unit");
+    // "Other reason" is sometimes only mice or another animal, and the headline then says which.
+    expect(rats([visit("2026-01-05", "Failed for Other Reason", { observations: "Mice" })])[0]!.what).toBe("Failed rat inspection: mice");
+    expect(rats([visit("2026-01-05", "Failed for Other Reason")])[0]!.what).toBe("Failed rat inspection: conditions that attract rats");
+  });
+
+  it("is open until the lot passes a later inspection, and closed on the day it first does", () => {
+    const rows = rats(VISITS);
+    expect(rows.map((v) => [v.date, v.status, v.closedAt])).toEqual([
+      ["2020-02-27", "closed", "2026-02-27"],
+      ["2019-10-22", "closed", "2019-12-26"],
+      ["2019-06-25", "closed", "2019-12-26"],
+      ["2018-12-28", "closed", "2019-12-26"],
+    ]);
+    // An earlier pass, baiting and monitoring don't close a failure; nor does a pass at the same moment.
+    const open = rats([visit("2026-05-01", "Bait applied"), visit("2026-04-02", "Monitoring visit"), visit("2026-04-01", "Failed for Rat Activity"), visit("2026-04-01", "Passed"), visit("2025-01-01", "Passed")]);
+    expect(open.map((v) => [v.status, v.closedAt])).toEqual([["open", null]]);
+    // Whatever order the rows arrive in.
+    expect(rats([...VISITS].reverse()).map((v) => v.status)).toEqual(["closed", "closed", "closed", "closed"]);
+  });
+
+  it("says what the inspectors saw, what the city sent, and what the newest visit of any kind found", () => {
+    const [newest, followUp, , summons] = rats(VISITS);
+    expect(newest!.facts).toEqual([
+      ["Inspection", "First inspection"],
+      ["What inspectors saw", "Burrows"],
+      ["Notice or order issued", "Order to fix it sent to the owner (Commissioner's Order to Abate)"],
+      ["Address inspected", "1018 EASTERN PARKWAY"],
+      ["Newest visit to this lot", "2026-02-27 · Passed"],
+      ["City put down rat bait here", "2019-12-19, the latest of 2 times"],
+    ]);
+    expect(followUp!.facts).toContainEqual(["Inspection", "Follow-up after a failed inspection"]);
+    expect(followUp!.facts!.map(([k]) => k)).not.toContain("Notice or order issued");
+    expect(summons!.facts).toContainEqual(["Notice or order issued", "Summons Issued"]);
+    // The newest visit may be a treatment; when it is the failed inspection itself, there is nothing to add.
+    expect(rats([visit("2026-05-01", "Bait applied"), visit("2026-04-01", "Failed for Rat Activity")])[0]!.facts).toContainEqual(["Newest visit to this lot", "2026-05-01 · Bait applied"]);
+    expect(rats([visit("2026-04-01", "Failed for Rat Activity"), visit("2025-01-01", "Passed")])[0]!.facts!.map(([k]) => k)).not.toContain("Newest visit to this lot");
+  });
+
+  it("says the inspection was of the whole lot when the lot has several buildings", () => {
+    const one = rats(VISITS)[0]!;
+    expect(one.facts!.map(([k]) => k)).not.toContain("Covers");
+    const several = rats(VISITS, { pluto: [{ numbldgs: "39" }] })[0]!;
+    expect(several.facts).toContainEqual(["Covers", "The whole tax lot, which has 39 buildings"]);
+  });
+
+  it("lists the newest 200 failures, and says when visits or failures were cut off or didn't load", () => {
+    const many = Array.from({ length: VIOLATION_LIMITS.rats + 5 }, (_, i) => visit(`20${String(10 + Math.floor(i / 300)).padStart(2, "0")}-01-01`, "Failed for Rat Activity", { inspection_date: new Date(Date.UTC(2010, 0, 1 + i)).toISOString().slice(0, 23) }));
+    const cut = computeViolations(raw({ ratInspections: many }));
+    expect(cut.items.filter((v) => v.source === "rats")).toHaveLength(VIOLATION_LIMITS.rats);
+    expect(cut.items[0]!.date).toBe(new Date(Date.UTC(2010, 0, VIOLATION_LIMITS.rats + 5)).toISOString().slice(0, 10));
+    expect(cut.truncated.rats).toBe(true);
+    expect(cut.totals.rats).toBe(VIOLATION_LIMITS.rats);
+    expect(computeViolations(raw({ ratInspections: VISITS })).truncated.rats).toBe(false);
+    expect(computeViolations(raw({ ratInspections: Array.from({ length: RAT_VISITS }, () => visit("2026-01-01", "Passed")) })).truncated.rats).toBe(true);
+    expect(computeViolations(raw({ failed: ["ratInspections"] })).unavailable).toEqual(["rats"]);
+  });
+});
+
+describe("city emergency repairs", () => {
+  /** Live mdbu-nrqn and sbnd-xujn rows for 1018 Eastern Parkway (2026-10-03), as the queries select them. */
+  const DONE: Row = {
+    omonumber: "EN05211",
+    apartment: "15L",
+    lifecycle: "Standing Building",
+    worktypegeneral: "GC",
+    omostatusreason: "OMO Completed",
+    omoawardamount: "250",
+    omocreatedate: "2022-08-29T00:00:00.000",
+    netchangeorders: "0",
+    omoawarddate: "2022-08-30T00:00:00.000",
+    servicechargeflag: "False",
+    omodescription: "hpd emergency operations service work'' division install hinges to make door self-closing at the entrance located at apt 15l, 3rd story,",
+  };
+  const REFUSED: Row = { ...DONE, omonumber: "EN01602", apartment: "12R", omostatusreason: "Tenant Refused Access", omoawardamount: "50", omocreatedate: "2022-07-15T00:00:00.000", omoawarddate: "2022-09-14T00:00:00.000", servicechargeflag: "True" };
+  const STAFF_DONE: Row = {
+    hwonumber: "EN00405",
+    lifecycle: "Standing Building",
+    worktypegeneral: "GC",
+    hwostatusreason: "OMO Completed",
+    hwocreatedate: "2022-07-05T00:00:00.000",
+    hwodescription: "nyc hpd emergency operations division \u001a \u001a essential service work \u001a at apt # 16r. replace the installed key operated lock installed at door le",
+    hwoapprovedamount: "47.84",
+    salestax: "4.25",
+    adminfee: "23.92",
+    chargeamount: "76.01",
+    datetransferdof: "2023-03-02T00:00:00.000",
+  };
+  const STAFF_OTHERS: Row = {
+    hwonumber: "EM23595",
+    lifecycle: "Standing Building",
+    worktypegeneral: "PLUMB",
+    hwostatusreason: "Work Done by Others",
+    hwocreatedate: "2022-05-02T00:00:00.000",
+    hwodescription: "nyc hpd emerency operations division \u001a\u001a at apt 14l, bedroom: replace defective/broken air valve, with new air valve on radiator in 1st",
+    hwoapprovedamount: "20.34",
+    salestax: "1.81",
+    adminfee: "10.17",
+    chargeamount: "32.32",
+    datetransferdof: "2022-08-15T00:00:00.000",
+  };
+  const repairs = (over: Partial<RawBuildingData>) => computeViolations(raw(over)).items.filter((v) => v.source === "repairs");
+
+  it("makes one closed row per order, with the work type in the headline and the apartment as its place", () => {
+    const [done, refused] = repairs({ repairOrders: [DONE, REFUSED] });
+    expect(done).toMatchObject({
+      source: "repairs",
+      kind: "repairs",
+      id: "EN05211",
+      ref: "HPD open market order EN05211",
+      what: "City made an emergency repair: general repairs",
+      where: "Apt 15L",
+      area: "apartment",
+      unit: "15L",
+      date: "2022-08-29",
+      status: "closed",
+      closedAt: null,
+      cityStatus: "OMO completed",
+      original: DONE.omodescription,
+      amount: 250,
+      done: true,
+    });
+    expect(done!.facts).toEqual([
+      ["Work type", "General repairs (GC)"],
+      ["Work given to", "A contractor hired by the city"],
+      ["Awarded to the contractor", "2022-08-30"],
+      ["Amount awarded", "$250"],
+    ]);
+    // A cancelled order is still a row, says why, and doesn't claim the city did the work.
+    expect(refused).toMatchObject({ what: "City ordered an emergency repair: general repairs", status: "closed", cityStatus: "Tenant refused access", where: "Apt 12R", amount: 50, done: false });
+    expect(refused!.facts).toContainEqual(["Service charge for a cancelled visit", "Yes"]);
+  });
+
+  it("reads a handyman order's apartment from its description, and carries every amount", () => {
+    const [done, others] = repairs({ handymanOrders: [STAFF_DONE, STAFF_OTHERS] });
+    expect(done).toMatchObject({ id: "EN00405", ref: "HPD handyman work order EN00405", what: "City made an emergency repair: general repairs", where: "Apt 16R", unit: "16R", amount: 76.01, done: true, date: "2022-07-05" });
+    // The control characters the city's text carries are gone from the wording.
+    expect(done!.original).toBe("nyc hpd emergency operations division essential service work at apt # 16r. replace the installed key operated lock installed at door le");
+    expect(done!.facts).toEqual([
+      ["Work type", "General repairs (GC)"],
+      ["Work given to", "City staff"],
+      ["Cost of the work", "$47.84"],
+      ["Sales tax", "$4.25"],
+      ["City's administrative fee", "$23.92"],
+      ["Charged to the landlord", "$76.01"],
+      ["Sent to the finance department to collect", "2023-03-02"],
+    ]);
+    expect(others).toMatchObject({ what: "City ordered an emergency repair: plumbing", cityStatus: "Work done by others", where: "Apt 14L", done: false, amount: 32.32 });
+  });
+
+  it("keeps a work type it has no words for as the city writes it, and names the two that are charges", () => {
+    const [move, fee, admin, none] = repairs({
+      repairOrders: [
+        { ...DONE, omonumber: "1", apartment: undefined, worktypegeneral: "MOVE", omodescription: "keep the belongings in storage", omocreatedate: "2026-04-01T00:00:00.000" },
+        { ...DONE, omonumber: "2", apartment: undefined, worktypegeneral: "AEPFEE", omostatusreason: "Work Partially Completed", isaep: "AEP", omodescription: "task fee omo for work omo eb16275", omocreatedate: "2026-03-01T00:00:00.000" },
+        { ...DONE, omonumber: "3", apartment: "BLDG", worktypegeneral: "7AFA", omostatusreason: undefined, omoawardamount: "448800", netchangeorders: "-800", omodescription: "building rehab", omocreatedate: "2026-02-01T00:00:00.000", lifecycle: "Under Construction", femaevent: "Hurricane Sandy", iscommercialdemolition: "COMM DEMOL" },
+        { ...DONE, omonumber: "4", apartment: undefined, omoawardamount: undefined, omodescription: "at apartment 2nd floor, replace the door", omocreatedate: "2026-01-01T00:00:00.000" },
+      ],
+    });
+    expect(move).toMatchObject({ what: "City made an emergency repair", where: "Building", area: "building" });
+    expect(move!.facts).toContainEqual(["Work type", "MOVE"]);
+    expect(fee!.what).toBe("City charged a fee for its enforcement program's work");
+    expect(fee!.facts).toContainEqual(["Under the Alternative Enforcement Program", "Yes"]);
+    expect(admin).toMatchObject({ what: "City paid for repairs under a court-appointed administrator", cityStatus: "No status on file", done: false, amount: 448000, where: "Building" });
+    expect(admin!.facts).toEqual(expect.arrayContaining([["Amount awarded", "$448,800"], ["Change orders", "-$800"], ["Commercial demolition", "Yes"], ["Disaster event", "Hurricane Sandy"], ["Building stage", "Under Construction"]]));
+    // "2nd floor" is not an apartment, and an order with no award has no amount.
+    expect(none).toMatchObject({ where: "Building", area: "building" });
+    expect(none).not.toHaveProperty("amount");
+    // An order for a shared part of the building is in the common areas, unless it names an apartment.
+    const [hall, roof, apt] = repairs({
+      repairOrders: [
+        { ...DONE, omonumber: "5", apartment: undefined, omodescription: "at public hall 4th story repair roof that wiill not leak at sky light", omocreatedate: "2026-03-03T00:00:00.000" },
+        { ...DONE, omonumber: "6", apartment: undefined, omodescription: "at bulkhead: **roof** trace and repair the leak at the skylight", omocreatedate: "2026-03-02T00:00:00.000" },
+        { ...DONE, omonumber: "7", apartment: "4R", omodescription: "apt 4r, ceiling under the roof: repair the leak", omocreatedate: "2026-03-01T00:00:00.000" },
+      ],
+    });
+    expect([hall, roof].map((x) => [x!.where, x!.area])).toEqual([["Common area", "common"], ["Common area", "common"]]);
+    expect(apt).toMatchObject({ where: "Apt 4R", area: "apartment", unit: "4R" });
+  });
+
+  it("sorts into the same newest-first list as the violations, and flags its limit or a failed query", () => {
+    const h = computeViolations(
+      raw({
+        repairOrders: [DONE, REFUSED],
+        handymanOrders: [STAFF_DONE],
+        ratInspections: [{ job_id: "PC1", inspection_date: "2022-08-01T09:00:00.000", result: "Failed for Rat Activity" }],
+        hpdViolationRows: [{ violationid: "9", class: "B", inspectiondate: "2022-07-10T00:00:00.000", violationstatus: "Open", novdescription: "REPAIR THE LEAK" }],
+      }),
+    );
+    expect(h.items.map((v) => [v.source, v.date])).toEqual([
+      ["repairs", "2022-08-29"],
+      ["rats", "2022-08-01"],
+      ["repairs", "2022-07-15"],
+      ["housing", "2022-07-10"],
+      ["repairs", "2022-07-05"],
+    ]);
+    expect(h.totals).toMatchObject({ rats: 1, repairs: 3 });
+    expect(h.truncated.repairs).toBe(false);
+    const full = Array.from({ length: VIOLATION_LIMITS.repairs }, (_, i) => ({ ...DONE, omonumber: String(i) }));
+    expect(computeViolations(raw({ repairOrders: full })).truncated.repairs).toBe(true);
+    expect(computeViolations(raw({ handymanOrders: full.map((r) => ({ ...STAFF_DONE, hwonumber: r.omonumber })) })).truncated.repairs).toBe(true);
+    expect(computeViolations(raw({ failed: ["handymanOrders"] })).unavailable).toEqual(["repairs"]);
+    expect(computeViolations(raw({ failed: ["repairOrders", "ratInspections"] })).unavailable).toEqual(["rats", "repairs"]);
+  });
+
+  it("leaves the snapshot's violation numbers, and everything else on the report, as they were", () => {
+    const housing = {
+      hpdViolationRows: [{ violationid: "9", class: "B", inspectiondate: "2026-07-10T00:00:00.000", violationstatus: "Open", novdescription: "REPAIR THE LEAK LOCATED AT APT 3FW", apartment: "3FW" }],
+      hpdYear: [{ violationstatus: "Open", n: "1" }],
+    };
+    const before = build(housing);
+    const after = build({
+      ...housing,
+      // An open rat failure and a repair in the searched apartment, both inside the last twelve months.
+      ratInspections: [{ job_id: "PC1", inspection_date: "2026-08-01T09:00:00.000", result: "Failed for Rat Activity" }],
+      repairOrders: [{ ...DONE, apartment: "3FW", omocreatedate: "2026-08-29T00:00:00.000" }],
+      handymanOrders: [{ ...STAFF_DONE, hwocreatedate: "2026-09-05T00:00:00.000" }],
+    });
+    expect(after.violations!.items.map((v) => [v.source, v.status])).toEqual([["repairs", "closed"], ["repairs", "closed"], ["rats", "open"], ["housing", "open"]]);
+    expect(snapshotOf(after)).toEqual(snapshotOf(before));
+    expect(snapshotOf(after)).toMatchObject({ openViolations: 1, openHazards: 1, openInUnit: 1, issued12mo: 1, unfixed12mo: 1 });
+    const { violations: _a, ...rest } = after;
+    const { violations: _b, ...restBefore } = before;
+    expect(rest).toEqual(restBefore);
+    // The free preview's sample row may be one of the new kinds; its open count is still the snapshot's.
+    const teaser = teaserOf(after, raw());
+    expect(teaser.preview).toMatchObject({ openViolations: 1, violation: { source: "repairs" } });
+  });
+});
+
+describe("city programs", () => {
+  /** Live hcir-3275 and bzxi-2tsw rows for 1018 Eastern Parkway, and an h4mf-f24e row for 70 West 128 Street (2026-10-03). */
+  const AEP: Row[] = [
+    { aep_start_date: "2023-01-31T00:00:00.000", of_b_c_violations_at_start: "2725", current_status: "AEP Active", aep_round: "Aep Round 16" },
+    { aep_start_date: "2013-01-31T00:00:00.000", of_b_c_violations_at_start: "2725", current_status: "AEP Discharged", discharge_date: "2018-10-31T00:00:00.000", aep_round: "Aep Round 6" },
+  ];
+  const SENSORS: Row = { program_start_date: "2025-06-11T00:00:00.000", current_status: "Active" };
+  const LISTED: Row = { bqi: "Yes", aep_order: "No", discharged_7a: "No", hpd_vacate_order: "No", dob_vacate_order: "No", harassment_finding: "No", date_added: "2022-06-24T00:00:00.000" };
+  const ACRONYM = /\b(AEP|HSP|CONH|HPD)\b/;
+
+  it("lists each stint in the enforcement program, open until the city discharges the building", () => {
+    const h = computeLegal(raw({ aep: AEP }));
+    expect(h.items.map((x) => [x.kind, x.what, x.date, x.status, x.closedAt, x.area, x.where])).toEqual([
+      ["program", "Put in the city's program for its worst-maintained buildings", "2023-01-31", "open", null, "building", "Building"],
+      ["program", "Put in the city's program for its worst-maintained buildings", "2013-01-31", "closed", "2018-10-31", "building", "Building"],
+    ]);
+    // The dataset repeats one count of violations on every stint, and the label says so.
+    expect(h.items[1]!.facts).toEqual([
+      ["Status", "Discharged"],
+      ["Started", "2013-01-31"],
+      ["Discharged", "2018-10-31"],
+      ["Round", "6"],
+      ["Hazardous violations open at the start (the city gives one figure for all of this building's stints)", "2,725"],
+      ["From", "Alternative Enforcement Program (HPD)"],
+    ]);
+    expect(h.items[0]!.facts.slice(0, 2)).toEqual([["Status", "Active"], ["Started", "2023-01-31"]]);
+    expect(computeLegal(raw({ aep: [AEP[1]!] })).items[0]!.facts).toContainEqual(["Hazardous violations open at the start", "2,725"]);
+    // A status that says discharged closes it even without a date.
+    expect(computeLegal(raw({ aep: [{ ...AEP[0]!, current_status: "AEP Discharged" }] })).items[0]).toMatchObject({ status: "closed", closedAt: null });
+  });
+
+  it("lists the heat sensor program the same way", () => {
+    const [active] = computeLegal(raw({ heatSensors: [SENSORS] })).items;
+    expect(active).toMatchObject({ kind: "program", what: "Required to install heat sensors after heat violations and complaints", date: "2025-06-11", status: "open", closedAt: null, area: "building" });
+    expect(active!.facts).toEqual([["Status", "Active"], ["Started", "2025-06-11"], ["From", "Heat Sensor Program (HPD)"]]);
+    const [out] = computeLegal(raw({ heatSensors: [{ ...SENSORS, current_status: "Discharged", discharge_date: "2026-07-01T00:00:00.000" }] })).items;
+    expect(out).toMatchObject({ status: "closed", closedAt: "2026-07-01" });
+    expect(out!.facts).toContainEqual(["Discharged", "2026-07-01"]);
+  });
+
+  it("lists the harassment list as open while the building is on it, with why it is listed", () => {
+    const [x] = computeLegal(raw({ harassmentList: [LISTED] })).items;
+    expect(x).toMatchObject({ kind: "program", what: "Landlord must show no tenant harassment before major construction permits", date: "2022-06-24", status: "open", closedAt: null, area: "building" });
+    expect(x!.facts).toEqual([
+      ["Status", "On the list"],
+      ["Added", "2022-06-24"],
+      ["Distress score over the city's threshold (Building Qualification Index)", "Yes"],
+      ["Discharged from the Alternative Enforcement Program", "No"],
+      ["Discharged from a court-appointed administrator (7A)", "No"],
+      ["Vacate order from the housing department", "No"],
+      ["Vacate order from the buildings department", "No"],
+      ["Finding of tenant harassment by a court or the state", "No"],
+      ["From", "Certification of No Harassment pilot building list (HPD)"],
+    ]);
+  });
+
+  it("keeps program acronyms out of every headline, sorts programs in with the rest, and says when one didn't load", () => {
+    const h = computeLegal(raw({ aep: AEP, heatSensors: [SENSORS], harassmentList: [LISTED], evictions: [EVICTION] }));
+    expect(h.items.map((x) => [x.kind, x.date])).toEqual([
+      ["eviction", "2025-11-13"],
+      ["program", "2025-06-11"],
+      ["program", "2023-01-31"],
+      ["program", "2022-06-24"],
+      ["program", "2013-01-31"],
+    ]);
+    for (const x of h.items) expect(x.what).not.toMatch(ACRONYM);
+    expect(h.unavailable).toEqual([]);
+    expect(computeLegal(raw({ failed: ["heatSensors"] })).unavailable).toEqual(["program"]);
+    expect(computeLegal(raw({ failed: ["aep", "harassmentList", "vacate"] })).unavailable).toEqual(["vacate", "program"]);
+  });
+
+  it("doesn't count as an open legal matter, or change the legal card", () => {
+    const before = build({ litigations: [{ casetype: "Tenant Action", caseopendate: "2026-08-28T00:00:00.000", casestatus: "PENDING" }] });
+    const after = build({ litigations: [{ casetype: "Tenant Action", caseopendate: "2026-08-28T00:00:00.000", casestatus: "PENDING" }], aep: AEP, heatSensors: [SENSORS], harassmentList: [LISTED] });
+    expect(after.legal!.items.filter((x) => x.kind === "program" && x.status === "open")).toHaveLength(3);
+    expect(snapshotOf(after)!.openLegal).toBe(1);
+    expect(snapshotOf(after)).toEqual(snapshotOf(before));
+    expect(card(after, "legal")).toEqual(card(before, "legal"));
+    expect(after.counts).toEqual(before.counts);
+  });
+});
+
+describe("property records", () => {
+  const doc = (doc_type: string, date: string, amount: string, over: Row = {}): Row => ({ document_id: `${date}-${doc_type}`, doc_type, document_date: `${date}T00:00:00.000`, recorded_datetime: `${date}T00:00:00.000`, document_amt: amount, percent_trans: "100", ...over });
+  const BBL = "2025050046";
+  const property = (docs: Row[], over: Partial<RawBuildingData> = {}, bbl = BBL) => computeProperty(raw({ acrisDocs: docs, ...over }), bbl);
+
+  it("takes the newest deed with a price as the last sale, and the newest mortgage", () => {
+    const p = property([doc("MTGE", "2013-08-26", "31000000"), doc("DEED", "2013-10-07", "111045119"), doc("MTGE", "2012-07-09", "30000000"), doc("DEED", "1998-03-01", "4000000")]);
+    expect(p.sale).toEqual({ date: "2013-10-07", price: 111045119 });
+    expect(p.mortgage).toEqual({ date: "2013-08-26", amount: 31000000 });
+  });
+
+  it("treats a deed with no price, or a token one, as a transfer", () => {
+    // 1130 Anderson Avenue (2026-10-03): its newest deed is for $1 and the older ones name nothing.
+    const anderson = property([doc("MTGE", "2018-03-14", "1475000"), doc("DEED", "2017-06-21", "1"), doc("DEED", "1996-04-02", "0"), doc("MTGE", "1992-09-04", "280000")]);
+    expect(anderson.sale).toEqual({ date: "2017-06-21", price: null });
+    expect(anderson.mortgage).toEqual({ date: "2018-03-14", amount: 1475000 });
+    // A real sale, then a transfer with no price: the sale stands, and the transfer is noted.
+    expect(property([doc("DEED", "2021-06-01", "0"), doc("DEED", "2015-03-03", "4200000")]).sale).toEqual({ date: "2015-03-03", price: 4200000, transferred: "2021-06-01" });
+    expect(property([doc("DEED", "2015-03-03", "2100000", { percent_trans: "50" })]).sale).toEqual({ date: "2015-03-03", price: 2100000, share: 50 });
+  });
+
+  it("reads only deeds and mortgages, dates a document by its recording when its own date is missing or impossible, and has nulls when the lot has none", () => {
+    const p = property([
+      doc("AGMT", "2024-05-30", "300000000"),
+      doc("ASST", "2023-01-01", "5000000"),
+      doc("MTGE", "", "0", { document_date: undefined, recorded_datetime: "1992-09-04T00:00:00.000" }),
+      doc("DEED", "0200-01-01", "900000", { recorded_datetime: "2009-09-09T00:00:00.000" }),
+    ]);
+    expect(p.sale).toEqual({ date: "2009-09-09", price: 900000 });
+    expect(p.mortgage).toEqual({ date: "1992-09-04", amount: null });
+    expect(property([])).toEqual({ sale: null, mortgage: null, taxLien: null });
+  });
+
+  it("leaves the sale and mortgage out for a condo building, and when ACRIS didn't load", () => {
+    expect(property([doc("DEED", "2015-03-03", "4200000")], {}, "1012237503")).toEqual({ taxLien: null });
+    expect(property([], { failed: ["acrisDocs"] })).toEqual({ taxLien: null });
+  });
+
+  it("takes the latest tax lien sale listing, its stage, and whether it was for water debt alone", () => {
+    // 9rz4-mjek rows for 1018 Eastern Parkway (2026-10-03).
+    const liens: Row[] = [
+      { month: "2025-04-01T00:00:00.000", cycle: "30 Day Notice", water_debt_only: "NO" },
+      { month: "2025-05-01T00:00:00.000", cycle: "10 Day Notice", water_debt_only: "NO" },
+      { month: "2021-12-03T00:00:00.000", cycle: "10 Day Notice", water_debt_only: "NO" },
+    ];
+    expect(property([], { taxLiens: liens }).taxLien).toEqual({ month: "2025-05-01", stage: "10 Day Notice", waterOnly: false });
+    // The city writes yes as YES in some years and Y in others.
+    expect(property([], { taxLiens: [{ month: "2025-06-01T00:00:00.000", cycle: "Final Sale", water_debt_only: "YES" }] }).taxLien).toEqual({ month: "2025-06-01", stage: "Final Sale", waterOnly: true });
+    expect(property([], { taxLiens: [{ month: "2019-07-01T00:00:00.000", cycle: "10 Day Notice", water_debt_only: "Y" }] }).taxLien!.waterOnly).toBe(true);
+    expect(property([], { failed: ["taxLiens"] })).toEqual({ sale: null, mortgage: null });
+  });
+
+  it("is on the report", () => {
+    expect(build({ acrisDocs: [doc("DEED", "2015-03-03", "4200000")] }).property).toEqual({ sale: { date: "2015-03-03", price: 4200000 }, mortgage: null, taxLien: null });
+    expect(build().sources).toEqual([]);
+  });
+});
+
+describe("building facts from the other building records", () => {
+  const cover = (over: Partial<RawBuildingData> = {}) => build(over).cover;
+
+  it("flood zone: says which of the two maps puts the lot in the floodplain, and no when neither does", () => {
+    expect(cover().floodZone).toEqual({ firm2007: false, prelim2015: false });
+    expect(cover({ pluto: [{ firm07_flag: "1", pfirm15_flag: "1" }] }).floodZone).toEqual({ firm2007: true, prelim2015: true });
+    expect(cover({ pluto: [{ pfirm15_flag: "1" }] }).floodZone).toEqual({ firm2007: false, prelim2015: true });
+    // No PLUTO row, or none loaded: nothing to say.
+    expect(cover({ pluto: [] }).floodZone).toBeNull();
+    expect(cover({ pluto: [], failed: ["pluto"] })).not.toHaveProperty("floodZone");
+  });
+
+  it("facade: the newest cycle's status, by cycle number, with the date its newest report was filed", () => {
+    // xubg-57si rows for 350 Fifth Avenue (2026-10-03): cycle is text, and the newest cycle's report is still under review.
+    const rows: Row[] = [
+      { cycle: "9", filing_type: "Auto-Generated", current_status: "SWARMP", filing_status: "No Report Filed" },
+      { cycle: "9", filing_type: "Subsequent", submitted_on: "2024-11-27T00:00:00.000", current_status: "SWARMP", filing_date: "2024-11-27T00:00:00.000", filing_status: "SWARMP" },
+      { cycle: "9", filing_type: "Initial", submitted_on: "2022-02-21T00:00:00.000", current_status: "SWARMP", filing_date: "2022-02-21T00:00:00.000", filing_status: "SWARMP" },
+      { cycle: "6", filing_type: "Initial", submitted_on: "2006-12-12T00:00:00.000", current_status: "SWARMP", filing_date: "2006-12-12T00:00:00.000", filing_status: "UNSAFE" },
+    ];
+    expect(cover({ facades: rows }).facade).toEqual({ status: "Safe with repairs needed", cycle: 9, filed: "2024-11-27" });
+    const ten: Row = { cycle: "10", filing_type: "Initial", submitted_on: "2026-08-31T00:00:00.000", filing_date: "2026-08-31T00:00:00.000", filing_status: "SAFE" };
+    expect(cover({ facades: [...rows, ten] }).facade).toEqual({ status: "Safe", cycle: 10, filed: "2026-08-31" });
+    expect(cover({ facades: [{ cycle: "9", filing_type: "Initial", current_status: "UNSAFE", filing_date: "2023-05-01T00:00:00.000", filing_status: "UNSAFE" }] }).facade).toMatchObject({ status: "Unsafe" });
+    // 1130 Anderson Avenue: the city's own row for a building that filed nothing.
+    expect(cover({ facades: [{ cycle: "9", filing_type: "Auto-Generated", current_status: "No Report Filed", filing_status: "No Report Filed" }] }).facade).toEqual({ status: "No report filed", cycle: 9, filed: null });
+    expect(cover().facade).toBeNull();
+    expect(cover({ failed: ["facades"] })).not.toHaveProperty("facade");
+  });
+
+  it("boiler: the newest inspection, and whether each boiler's newest filing reports defects", () => {
+    const row = (boiler_id: string, tracking: string, date: string, defects: string, report_type = "Initial"): Row => ({ tracking_number: tracking, boiler_id, report_type, inspection_date: `${date} 00:00:00`, defects_exist: defects });
+    // 52dp-yji6 rows for 1018 Eastern Parkway, newest filing first as the query returns them.
+    const sample = [row("A", "2026-A-866761", "05/13/2026", "Yes"), row("A", "2024-A-659257", "04/05/2024", "No"), row("A", "2023-A-599280", "08/29/2023", "No")];
+    expect(cover({ boilers: sample }).boiler).toEqual({ inspected: "2026-05-13", boilers: 1, withDefects: 1 });
+    // 1130 Anderson Avenue, 2024: a later filing corrected the defects of that year's inspection.
+    expect(cover({ boilers: [row("B", "2024-B-684055", "07/02/2024", "No", "Subsequent"), row("B", "2024-B-661412", "04/13/2024", "Yes")] }).boiler).toEqual({ inspected: "2024-07-02", boilers: 1, withDefects: 0 });
+    // Two boilers in use, and one last inspected years before them, which doesn't count.
+    const several = [row("A", "2026-A-2", "03/10/2026", "No"), row("C", "2026-C-1", "02/01/2026", "Yes"), row("OLD", "2019-OLD-1", "01/15/2019", "Yes")];
+    expect(cover({ boilers: several }).boiler).toEqual({ inspected: "2026-03-10", boilers: 2, withDefects: 1 });
+    expect(cover({ boilers: [{ boiler_id: "A", inspection_date: "not a date" }] }).boiler).toBeNull();
+    expect(cover().boiler).toBeNull();
+    expect(cover({ failed: ["boilers"] })).not.toHaveProperty("boiler");
+  });
+
+  it("legal apartments: the units on the newest certificate of occupancy, skipping one dated in the future", () => {
+    // bs8b-p36w rows for BIN 1089806 (2026-10-03); the first is dated 2105 in the city's data.
+    const rows: Row[] = [
+      { c_o_issue_date: "2105-11-05T00:00:00.000", pr_dwelling_unit: "198", issue_type: "Temporary" },
+      { c_o_issue_date: "2022-06-27T00:00:00.000", pr_dwelling_unit: "198", issue_type: "Final" },
+      { c_o_issue_date: "2021-03-02T00:00:00.000", pr_dwelling_unit: "190", issue_type: "Temporary" },
+    ];
+    expect(cover({ certificates: rows }).legalUnits).toEqual({ units: 198, date: "2022-06-27", temporary: false });
+    expect(cover({ certificates: rows.slice(2) }).legalUnits).toEqual({ units: 190, date: "2021-03-02", temporary: true });
+    expect(cover({ certificates: rows.slice(0, 1) }).legalUnits).toBeNull();
+    expect(cover().legalUnits).toBeNull();
+    expect(cover({ failed: ["certificates"] })).not.toHaveProperty("legalUnits");
+  });
+
+  it("work permits: how many were issued in twelve months, with their work types, or null when none were", () => {
+    const rows: Row[] = [
+      { work_type: "General Construction", permits: "22", latest: "2026-09-14T00:00:00.000" },
+      { work_type: "Plumbing", permits: "12", latest: "2026-06-26T00:00:00.000" },
+      { work_type: "Sidewalk Shed", permits: "1", latest: "2026-07-21T00:00:00.000" },
+    ];
+    expect(cover({ permits: rows }).permits12mo).toEqual({ count: 35, types: ["General Construction", "Plumbing", "Sidewalk Shed"] });
+    expect(cover().permits12mo).toBeNull();
+    expect(cover({ failed: ["permits"] })).not.toHaveProperty("permits12mo");
+  });
+
+  it("asbestos: counts projects, not their rows, and takes the latest that isn't dated centuries away", () => {
+    const rows: Row[] = [
+      { tru: "TRU9999MN26", start_date: "2423-10-31T23:00:00.000", status_description: "Submitted" },
+      { tru: "TRU1064MN26", start_date: "2026-05-04T00:00:00.000", status_description: "Closed" },
+      { tru: "TRU2782MN25", start_date: "2026-01-02T00:00:00.000", status_description: "Closed" },
+      { tru: "TRU2782MN25", start_date: "2026-01-02T00:00:00.000", status_description: "Postponed" },
+    ];
+    expect(cover({ asbestos: rows }).asbestos).toEqual({ filings: 3, latestStart: "2026-05-04", latestStatus: "Closed" });
+    expect(cover().asbestos).toBeNull();
+    expect(cover({ failed: ["asbestos"] })).not.toHaveProperty("asbestos");
+  });
+
+  it("rent stabilization hint: a 421-a or J-51 exemption on this tax year's roll, and nothing for an earlier year's", () => {
+    // The report is dated October 2026: tax year 2027 (July 2026 to June 2027). muvi-b6kx rows for lot 1000160185.
+    const a421: Row[] = [
+      { year: "2027", period: "3", exmp_code: "5116", curexmptot: "8812692" },
+      { year: "2026", period: "3", exmp_code: "5116", curexmptot: "18124524" },
+    ];
+    expect(cover({ exemptions: a421 }).taxBreak).toEqual({ program: "421-a", taxYear: 2027 });
+    expect(cover({ exemptions: [{ year: "2027", period: "1", exmp_code: "1920", curexmptot: "164602" }] }).taxBreak).toEqual({ program: "J-51", taxYear: 2027 });
+    expect(cover({ exemptions: a421.slice(1) }).taxBreak).toBeNull();
+    expect(cover().taxBreak).toBeNull();
+    expect(cover({ failed: ["exemptions"] })).not.toHaveProperty("taxBreak");
+    // Before July the tax year is the calendar year.
+    const june = computeReport({ id: "x", address: ADDRESS, raw: { ...raw({ exemptions: a421 }), fetchedAt: "2026-06-30T12:00:00.000Z" }, now: new Date("2026-06-30T12:00:00Z") }).cover;
+    expect(june.taxBreak).toEqual({ program: "421-a", taxYear: 2026 });
+  });
+
+  it("is on the teaser's cover too, so the free preview shows the same tiles", () => {
+    const over = { pluto: [{ firm07_flag: "1" }], permits: [{ work_type: "Plumbing", permits: "2" }] };
+    const r = build(over);
+    expect(teaserOf(r, raw(over)).cover).toEqual(r.cover);
+    expect(r.cover).toMatchObject({ floodZone: { firm2007: true, prelim2015: false }, permits12mo: { count: 2, types: ["Plumbing"] } });
   });
 });

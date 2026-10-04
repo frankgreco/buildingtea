@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Complaint, ViolationRecord } from "../shared/types";
-import { dotStrip, DOT_CAP, fullDate, groupByPlace, kindOf, parseView, placeKeyOf, shortDate, toggleShown, VIEW_MODES, yourUnitOf } from "../web/src/historyModel";
+import { dotStrip, DOT_CAP, fullDate, groupByPlace, kindOf, parseView, placeKeyOf, shortDate, toggleShown, VIEW_MODES, VIOLATION_KINDS, yourUnitOf } from "../web/src/historyModel";
 
 const NOW = new Date("2026-10-03T12:00:00Z");
 
@@ -149,6 +149,9 @@ describe("dates, kinds and views", () => {
   it("reads an unknown kind as paperwork", () => {
     expect(kindOf(v({ kind: "immediate" }))).toBe("immediate");
     expect(kindOf(v({ kind: "weird" as never }))).toBe("paperwork");
+    // A failed rat inspection and a city repair are kinds of their own, with a name for the row's details.
+    expect([kindOf(v({ source: "rats", kind: "rats" })), kindOf(v({ source: "repairs", kind: "repairs" }))]).toEqual(["rats", "repairs"]);
+    expect(VIOLATION_KINDS.filter((k) => k.key === "rats" || k.key === "repairs").map((k) => k.name)).toEqual(["Rat inspection", "City emergency repair"]);
   });
 
   it("offers a list and groups by place, and falls back to the list", () => {

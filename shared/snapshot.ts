@@ -4,7 +4,15 @@
 // twelve months before the report was generated (365 days, to match the city queries).
 
 import { normalizeUnit } from "./address";
-import type { Bedbugs, Report } from "./types";
+import type { Bedbugs, LegalKind, Report, ViolationSource } from "./types";
+
+/**
+ * What the snapshot's violation numbers count: housing and buildings violations and summonses. The
+ * Violations section also lists failed rat inspections and city repairs, which are not violations.
+ */
+const VIOLATION_SOURCES: ViolationSource[] = ["housing", "buildings", "summons"];
+/** What "open legal matters" counts. A city program the building is in is listed under Legal, but isn't one. */
+const LEGAL_MATTERS: LegalKind[] = ["case", "vacate"];
 
 export type BedbugFiling =
   /** The landlord filed the yearly report: how many apartments it says had bedbugs. */
@@ -51,8 +59,9 @@ function bedbugFiling(b: Bedbugs | undefined): BedbugFiling {
 
 /** The snapshot, or null for a report stored before it had every violation as its own record. */
 export function snapshotOf(r: SnapshotSource): Snapshot | null {
-  const violations = r.violations?.items;
-  if (!Array.isArray(violations)) return null;
+  const listed = r.violations?.items;
+  if (!Array.isArray(listed)) return null;
+  const violations = listed.filter((v) => VIOLATION_SOURCES.includes(v.source));
   // The same 365 days the city is asked about (src/lib/datasets.ts).
   const from = new Date(Date.parse(r.generatedAt) - 365 * 86_400_000).toISOString().slice(0, 10);
   // Housing violations come from the city's own count when the report has it: the row list is
@@ -81,7 +90,7 @@ export function snapshotOf(r: SnapshotSource): Snapshot | null {
     unfixed12mo: recent.filter((v) => v.status === "open").length + (counted?.open ?? 0),
     heatComplaints12mo: complaints.filter((c) => Array.isArray(c.topics) && c.topics.includes("heat")).length,
     housingComplaints12mo: complaints.filter((c) => c.source === "hpd").length,
-    openLegal: Array.isArray(r.legal?.items) ? r.legal.items.filter((x) => x.status === "open").length : null,
+    openLegal: Array.isArray(r.legal?.items) ? r.legal.items.filter((x) => x.status === "open" && LEGAL_MATTERS.includes(x.kind)).length : null,
     bedbugs: filing,
   };
 }

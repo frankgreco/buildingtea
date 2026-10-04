@@ -102,6 +102,26 @@ describe("snapshot", () => {
     expect(s.openHazards).toBe(550);
   });
 
+  it("counts only violations and summonses: a failed rat inspection or a city repair changes none of its numbers", () => {
+    const counted = [v({ kind: "immediate", unit: "D5" }), v({ source: "summons", kind: "summons" }), v({ source: "buildings", kind: "buildings", status: "closed" })];
+    // Each of these would move a number if it were counted: open, in the last twelve months, in the searched apartment.
+    const listedToo = [
+      v({ source: "rats", kind: "rats", unit: "D5" }),
+      v({ source: "rats", kind: "rats", status: "closed" }),
+      v({ source: "repairs", kind: "repairs", status: "closed", unit: "D5" }),
+      v({ source: "repairs", kind: "repairs", unit: "D5", original: "EXTERMINATE THE BEDBUGS" }),
+    ];
+    const before = snapshotOf(source({ violations: { items: counted } } as Partial<SnapshotSource>))!;
+    const after = snapshotOf(source({ violations: { items: [...counted, ...listedToo] } } as Partial<SnapshotSource>))!;
+    expect(before).toMatchObject({ openViolations: 2, openHazards: 1, openInUnit: 1, issued12mo: 3, unfixed12mo: 2, bedbugsReported: false });
+    expect(after).toEqual(before);
+    // The same with the city's own counts in play.
+    const capped = (items: ViolationRecord[]) =>
+      snapshotOf(source({ counts: { openA: 1, openB: 2, openC: 3, openI: 0 }, violations: { items, lastYear: { housing: { issued: 40, open: 3 } } } } as unknown as Partial<SnapshotSource>))!;
+    expect(capped([...counted, ...listedToo])).toEqual(capped(counted));
+    expect(capped(counted)).toMatchObject({ openViolations: 7, openHazards: 5, issued12mo: 42, unfixed12mo: 4 });
+  });
+
   it("has no apartment count when the search named none", () => {
     expect(snapshotOf(source({ violations: { items: [v({ unit: "D5" })] } } as Partial<SnapshotSource>, null))!.openInUnit).toBeNull();
   });
@@ -147,6 +167,10 @@ describe("snapshot", () => {
   it("counts court cases that aren't closed and vacate orders in effect, not evictions", () => {
     const s = snapshotOf(source({ legal: { items: [legal("case", "open"), legal("case", "closed"), legal("vacate", "open"), legal("eviction", "closed")] } } as Partial<SnapshotSource>))!;
     expect(s.openLegal).toBe(2);
+    // A city program the building is still in is listed under Legal, and is not a legal matter.
+    const programs = [legal("program", "open"), legal("program", "open"), legal("program", "closed")];
+    expect(snapshotOf(source({ legal: { items: [legal("case", "open"), legal("vacate", "open"), ...programs] } } as Partial<SnapshotSource>))!.openLegal).toBe(2);
+    expect(snapshotOf(source({ legal: { items: programs } } as Partial<SnapshotSource>))!.openLegal).toBe(0);
     // A report stored before legal records has no number to give.
     expect(snapshotOf(source({ legal: undefined }))!.openLegal).toBeNull();
   });

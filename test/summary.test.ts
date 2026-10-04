@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { templateSummary } from "../src/lib/summary";
+import { describe, expect, it, vi } from "vitest";
+import { rewriteSummary } from "../src/lib/llm";
+import { alsoOnFile, templateSummary } from "../src/lib/summary";
 import type { Snapshot } from "../shared/snapshot";
-import type { Address, Bedbugs, Card, Counts, Cover, Ownership } from "../shared/types";
+import type { Address, Bedbugs, Card, Counts, Cover, LegalRecord, Ownership, Report, ViolationRecord } from "../shared/types";
 
 const address: Address = { label: "x", borough: "Bronx", zip: "10452", bin: "2003068", bbl: "2025050046", houseNumber: "1130", street: "ANDERSON AVENUE", unit: null, lotOnly: false, hpdBuildingId: "45427", lat: 0, lon: 0 };
 const cover: Cover = { yearBuilt: 1928, yearAltered: null, unitsRes: 42, unitsTotal: 42, floors: 6, buildingsOnLot: 1, buildingClass: "D1", zoning: "R7-1", plutoOwner: "X", historicDistrict: null, landmark: null, elevators: 1, plutoVersion: "26v2" };
@@ -54,5 +55,72 @@ describe("templateSummary", () => {
     const stale = templateSummary({ address, cover, counts, ownership, bedbugs, cards: [{ ...cards[0]!, status: "warn" }] });
     expect(stale).toMatch(/probably old paperwork rather than live problems\./);
     expect(stale).toMatch(/Before you sign, ask the landlord whether those were fixed\.$/);
+  });
+});
+
+describe("the newer records, as facts for the summary", () => {
+  const v = (over: Partial<ViolationRecord>): ViolationRecord => ({ source: "housing", kind: "hazardous", id: "1", ref: "", what: "x", where: "Building", date: "2026-09-12", status: "open", cityStatus: "", closedAt: null, original: "", ...over });
+  const program = (what: string, date: string, status: LegalRecord["status"]): LegalRecord => ({ kind: "program", what, where: "Building", date, status, closedAt: null, facts: [] });
+  const report = {
+    cover: { ...cover, floodZone: { firm2007: false, prelim2015: true } },
+    violations: {
+      items: [
+        v({}),
+        v({ source: "rats", kind: "rats", date: "2020-02-27", status: "closed" }),
+        v({ source: "rats", kind: "rats", date: "2026-04-01" }),
+        v({ source: "repairs", kind: "repairs", status: "closed", date: "2022-08-29", amount: 250, done: true }),
+        v({ source: "repairs", kind: "repairs", status: "closed", date: "2022-07-05", amount: 76.01, done: true }),
+        v({ source: "repairs", kind: "repairs", status: "closed", date: "2022-09-14", amount: 34320, done: false }),
+      ],
+    },
+    legal: {
+      items: [
+        program("Put in the city's program for its worst-maintained buildings", "2023-01-31", "open"),
+        program("Put in the city's program for its worst-maintained buildings", "2013-01-31", "closed"),
+        { kind: "case", what: "Court case: Tenant Action", where: "Building", date: "2026-08-28", status: "open", closedAt: null, facts: [] },
+      ],
+    },
+    property: { taxLien: { month: "2025-05-01", stage: "10 Day Notice", waterOnly: false } },
+  } as unknown as Report;
+
+  it("counts rat inspections and city repairs, names the programs the building is in, and gives the lien listing and flood zone", () => {
+    expect(alsoOnFile(report)).toEqual({
+      failedRatInspections: 2,
+      failedRatInspectionsNotPassedSince: 1,
+      latestFailedRatInspection: "2026-04-01",
+      cityEmergencyRepairOrders: 3,
+      cityEmergencyRepairsCarriedOut: 2,
+      // Only the orders the city carried out, and written out so the model's number guard knows it.
+      cityEmergencyRepairsCarriedOutCost: "$326",
+      latestCityEmergencyRepairOrder: "2022-09-14",
+      activeCityPrograms: ["Put in the city's program for its worst-maintained buildings, since Jan 2023"],
+      taxLienSaleList: "May 2025, 10 Day Notice, not for water debt alone",
+      inFloodZone: true,
+    });
+  });
+
+  it("is all zeros and nulls on a report stored before any of these", () => {
+    expect(alsoOnFile({ cover } as unknown as Report)).toEqual({
+      failedRatInspections: 0,
+      failedRatInspectionsNotPassedSince: 0,
+      latestFailedRatInspection: null,
+      cityEmergencyRepairOrders: 0,
+      cityEmergencyRepairsCarriedOut: 0,
+      cityEmergencyRepairsCarriedOutCost: null,
+      latestCityEmergencyRepairOrder: null,
+      activeCityPrograms: [],
+      taxLienSaleList: null,
+      inFloodZone: null,
+    });
+  });
+
+  it("reaches the summary model in its facts, so the rewrite may quote them", async () => {
+    const reply = "This building failed a rat inspection in April and the city has made repairs here that cost $326. Ask the landlord about both before you sign anything.";
+    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ model: "test", choices: [{ message: { content: reply } }] })));
+    const out = await rewriteSummary({ apiKey: "sk-test", fetcher: fetcher as unknown as typeof fetch }, { address, cover, counts, ownership, bedbugs, cards, also: alsoOnFile(report) }, "Draft.");
+    const sent = JSON.parse(String(fetcher.mock.calls[0]![1]!.body)).messages[1].content as string;
+    expect(JSON.parse(sent.slice(sent.indexOf("{"))).facts.alsoOnFile).toEqual(alsoOnFile(report));
+    // 326 is in the facts, so the guard on numbers lets the rewrite through.
+    expect(out?.text).toBe(reply);
   });
 });

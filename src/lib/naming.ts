@@ -25,10 +25,16 @@ export interface NamingItem {
 /** Wordings one pass names at most, newest first. */
 export const NAMING_MAX = 180;
 
-const VIOLATION_TYPE: Record<ViolationRecord["source"], string> = { housing: "housing violation", buildings: "buildings violation", summons: "city summons" };
+const VIOLATION_TYPE: Record<ViolationRecord["source"], string> = {
+  housing: "housing violation",
+  buildings: "buildings violation",
+  summons: "city summons",
+  rats: "rat inspection",
+  repairs: "city emergency repair",
+};
 const COMPLAINT_TYPE: Record<Complaint["source"], string> = { hpd: "housing complaint", dob: "buildings complaint", "311": "311 request" };
 
-const LEGAL_TYPE: Record<LegalRecord["kind"], string> = { case: "housing court case", vacate: "vacate order", eviction: "eviction" };
+const LEGAL_TYPE: Record<LegalRecord["kind"], string> = { case: "housing court case", vacate: "vacate order", eviction: "eviction", program: "city program" };
 /**
  * The fields a legal record is named from: what it is and how it stands, not who, when, how much or
  * which docket. Leaving the amounts out keeps the wordings few however many cases a building has.
@@ -40,7 +46,8 @@ type Named = ViolationRecord | Complaint;
 /**
  * The wording a violation is named from: the city's text without the tail that only says which
  * apartment it is in ("... LOCATED AT APT D5, 4th STORY, 1st APARTMENT FROM NORTH AT EAST"), so the
- * same condition in two apartments is one wording with one name.
+ * same condition in two apartments is one wording with one name. A rat inspection's wording is its
+ * result and what the inspectors saw; a city repair's is the order's description.
  */
 const violationText = (v: ViolationRecord) => (v.original ?? "").replace(/\s+LOCATED AT APT\b.*$/i, "").trim();
 
@@ -60,9 +67,14 @@ const legalText = (x: LegalRecord) =>
 
 /** A row's key, or null when the city gave no wording to name it from. */
 const keyOf = (type: string | undefined, text: string): string | null => (type && text ? `${type}\n${text}` : null);
-const violationKey = (v: ViolationRecord) => keyOf(VIOLATION_TYPE[v.source], violationText(v));
+/**
+ * A repair order the city didn't carry out keeps its rule-written headline: its description is the
+ * work that was ordered, and a name written from that alone would read as work that was done.
+ */
+const violationKey = (v: ViolationRecord) => (v.source === "repairs" && v.done === false ? null : keyOf(VIOLATION_TYPE[v.source], violationText(v)));
 const complaintKey = (c: Complaint) => keyOf(COMPLAINT_TYPE[c.source], complaintText(c));
-const legalKey = (x: LegalRecord) => keyOf(LEGAL_TYPE[x.kind], legalText(x));
+/** A city program has no wording from the city beyond its name: the headline the rules give it is already the plain one. */
+const legalKey = (x: LegalRecord) => (x.kind === "program" ? null : keyOf(LEGAL_TYPE[x.kind], legalText(x)));
 
 const violationsOf = (r: Report): ViolationRecord[] => (Array.isArray(r.violations?.items) ? r.violations!.items : []);
 const complaintsOf = (r: Report): Complaint[] => (Array.isArray(r.complaints?.items) ? r.complaints.items : []);

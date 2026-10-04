@@ -9,7 +9,7 @@ Paste a New York City address, get a plain-English report on the building from t
 ## How it works
 
 ```
-address ──▶ GeoSearch ──▶ BIN + BBL ──▶ 29 parallel NYC Open Data queries ───▶ Report + Teaser ──▶ D1
+address ──▶ GeoSearch ──▶ BIN + BBL ──▶ 44 NYC Open Data queries ────────────▶ Report + Teaser ──▶ D1
                                                                                      │
    teaser (free) ◀── GET /api/report/:id ──────────────────────────────────────────┘
    full report  ◀── GET /api/report/:id  + Authorization: Bearer <token>
@@ -124,13 +124,13 @@ One transactional email goes out through [Resend](https://resend.com): the unloc
 2. Create an API key with sending access, limited to that domain. Add it as the `RESEND_API_KEY` GitHub secret (and to `.prod.vars`). The next push to `main` pushes it into the Worker.
 3. Send yourself the sample to check real inboxes: `RESEND_API_KEY=re_... pnpm email:preview --send you@example.com`.
 
-The landing page shows a sample under the search box: a full, unlocked report on `SAMPLE_ADDRESS` (a var in `wrangler.jsonc`; remove it to show none). `GET /api/sample` serves it from the database under a fixed id, builds it on the first request, and rebuilds it behind the response once it is 30 days old (`sampleReport` in `src/lib/pipeline.ts`), so it never describes a real building with months-old records. It gets the same AI summary and row names as a paid report.
+The landing page shows a sample under the search box: a full, unlocked report on `SAMPLE_ADDRESS` (a var in `wrangler.jsonc`; remove it to show none). `GET /api/sample` serves it from the database under a fixed id, builds it on the first request, and rebuilds it behind the response once it is 30 days old (`sampleReport` in `src/lib/pipeline.ts`), so it never describes a real building with months-old records. It gets the same AI summary and row names as a paid report, but never in the invocation that builds it: a build uses nearly all of an invocation's subrequests, so the request that builds does only that, and a later request that finds the sample without its AI summary starts that work behind its response (at most once every six hours per build, marked in KV).
 
 The sender is `EMAIL_FROM` in `wrangler.jsonc` (`BuildingTea <no-reply@buildingtea.com>`); replies are not received. The footer's Contact link and the legal pages point to the support address in `web/src/legal.ts`.
 
 ## Operations
 
-- **Cost.** Workers, D1, KV and static hosting are all on Cloudflare's free tier at this scale. A report build is 29 city-data requests (28 in parallel, then the registration contacts), plus 8 dataset stamps when the KV cache is cold. Domains are the only fixed cost.
+- **Cost.** Workers, D1, KV and static hosting are all on Cloudflare's free tier at this scale. A report build is at most 44 city-data requests (42 in parallel, then the registration contacts and the lot's deeds and mortgages), plus one or two address lookups: under the 50 subrequests an invocation gets on the free plan, with nothing else that fetches in the same invocation. Domains are the only fixed cost.
 - **Backups.** D1 keeps 30 days of point-in-time history (`pnpm exec wrangler d1 time-travel`). For an off-platform copy, `pnpm exec wrangler d1 export buildingtea --remote --output backup.sql`.
 - **Logs.** `pnpm exec wrangler tail` streams the Worker; observability is enabled in `wrangler.jsonc`.
 - **Email failures.** Every send carries an idempotency key, so retries never duplicate an email. Transient Resend failures are retried in place. A receipt that still fails is logged and not sent again; search the logs for `receipt email`.
