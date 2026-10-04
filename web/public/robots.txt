@@ -1,3 +1,7 @@
+# Twitter needs to read the preview metadata on shared report links.
+User-agent: Twitterbot
+Allow: /
+
 User-agent: *
 Allow: /
 Disallow: /r/
